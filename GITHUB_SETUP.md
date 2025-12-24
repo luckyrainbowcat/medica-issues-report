@@ -28,8 +28,8 @@ git --version
 
 #### 2.2 ตั้งค่า Git (ครั้งแรกเท่านั้น):
 ```powershell
-git config --global user.name "ชื่อของคุณ"
-git config --global user.email "อีเมลของคุณ"
+git config --global user.name "luckyrainbowcat"
+git config --global user.email "sanaluckycat@gmail.com"
 ```
 
 #### 2.3 Initialize Git Repository:
@@ -61,13 +61,9 @@ git commit -m "Initial commit: Issue Tracker MVP"
 แทนที่ `YOUR_USERNAME` และ `YOUR_REPO_NAME` ด้วยชื่อที่คุณสร้าง:
 
 ```powershell
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+git remote add origin https://github.com/luckyrainbowcat/medica-issues-report.git
 ```
 
-ตัวอย่าง:
-```powershell
-git remote add origin https://github.com/username/issue-tracker.git
-```
 
 #### 4.2 ตั้งชื่อ branch เป็น main (ถ้ายังไม่ใช่):
 ```powershell

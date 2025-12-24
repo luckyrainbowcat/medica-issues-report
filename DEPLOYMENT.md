@@ -16,7 +16,7 @@
 
 ### 3. **การเชื่อมต่อกับ Services**
 - **Firebase Firestore**: เชื่อมต่อผ่าน Firebase SDK (hardcode ใน `src/lib/firebase.ts`)
-- **MinIO**: เชื่อมต่อผ่าน environment variables สำหรับเก็บไฟล์ภาพ
+- **Firebase Storage**: ใช้สำหรับเก็บไฟล์ภาพ (ใช้ Firebase Admin SDK สำหรับ server-side upload)
 
 ---
 
@@ -42,6 +42,35 @@ Vercel เป็น platform ที่สร้างโดยทีม Next.js 
    - Vercel จะ detect Next.js อัตโนมัติ
 
 4. **ตั้งค่า Environment Variables**:
+
+   **ข่าวดี**: โปรเจกต์ใช้ **Firebase Storage** สำหรับเก็บไฟล์แล้ว! ไฟล์จะไม่หายไปหลัง deploy
+   
+   คุณต้องตั้งค่า environment variables ดังนี้:
+
+   ```
+   NEXT_PUBLIC_APP_URL=https://your-app.vercel.app
+   FIREBASE_SERVICE_ACCOUNT_KEY={"type":"service_account",...}
+   ```
+
+   **FIREBASE_SERVICE_ACCOUNT_KEY**: Service Account Key จาก Firebase
+   
+   **วิธีสร้าง Service Account Key**:
+   1. ไปที่ [Firebase Console](https://console.firebase.google.com)
+   2. เลือกโปรเจกต์ `medica-issuev2`
+   3. ไปที่ ⚙️ **Project Settings** → **Service Accounts**
+   4. คลิก **Generate New Private Key**
+   5. Download JSON file
+   6. Copy เนื้อหา JSON ทั้งหมดมาใส่ใน environment variable `FIREBASE_SERVICE_ACCOUNT_KEY`
+   
+   **หมายเหตุสำคัญ**:
+   - Firebase Storage เก็บไฟล์ถาวร ไม่หายหลัง deploy
+   - ไฟล์จะถูกเก็บใน `uploads/` folder ใน Firebase Storage bucket
+   - Firebase config อื่นๆ (เช่น apiKey, projectId) ถูกตั้งค่าใน `src/lib/firebase.ts` แล้ว
+   
+   **ถ้าต้องการใช้ MinIO (ตัวเลือกสำหรับ production)**:
+   
+   คุณต้องตั้งค่า environment variables เหล่านี้ (ถ้าต้องการใช้ MinIO):
+   
    ```
    MINIO_ENDPOINT=your-minio-domain.com
    MINIO_PORT=9000
@@ -50,8 +79,34 @@ Vercel เป็น platform ที่สร้างโดยทีม Next.js 
    MINIO_SECRET_KEY=your-secret-key
    MINIO_BUCKET=issue-uploads
    MINIO_PUBLIC_URL=https://your-minio-domain.com
-   NEXT_PUBLIC_APP_URL=https://your-domain.com
    ```
+   
+   **วิธีหาค่าต่างๆ** (ถ้าใช้ MinIO):
+   
+   - **MINIO_ENDPOINT**: Domain หรือ IP ของ MinIO server ที่คุณ deploy
+     - ตัวอย่าง: `minio.yourdomain.com` หรือ `192.168.1.100` (ถ้าใช้ IP)
+     - ถ้าใช้ MinIO Cloud: ใช้ endpoint ที่ MinIO ให้มา
+   
+   - **MINIO_PORT**: Port ของ MinIO (default: 9000)
+     - ถ้าใช้ SSL/HTTPS: ใช้ `443` แทน
+   
+   - **MINIO_USE_SSL**: ตั้งเป็น `true` ถ้าใช้ HTTPS, `false` ถ้าใช้ HTTP
+   
+   - **MINIO_ACCESS_KEY** และ **MINIO_SECRET_KEY**: 
+     - ตั้งค่าเองเมื่อติดตั้ง MinIO server
+     - Default: `minioadmin` / `minioadmin` (ควรเปลี่ยนเมื่อ deploy production!)
+     - ถ้าใช้ MinIO Cloud: ใช้ credentials ที่ได้จาก MinIO
+   
+   - **MINIO_BUCKET**: ชื่อ bucket ที่ใช้เก็บไฟล์ (default: `issue-uploads`)
+     - Bucket จะถูกสร้างอัตโนมัติเมื่อ upload ครั้งแรก
+   
+   - **MINIO_PUBLIC_URL**: URL ที่ผู้ใช้เข้าถึงไฟล์ได้ (ต้องเข้าถึงได้จาก browser)
+     - ตัวอย่าง: `https://minio.yourdomain.com` หรือ `https://storage.yourdomain.com`
+     - **สำคัญ**: URL นี้ต้องเข้าถึงได้จาก public internet
+   
+   - **NEXT_PUBLIC_APP_URL**: URL ของ Next.js app ที่ deploy แล้ว
+     - ถ้าใช้ Vercel: ใช้ URL ที่ Vercel ให้มา เช่น `https://your-app.vercel.app`
+     - หรือใช้ custom domain ที่ตั้งค่า เช่น `https://yourdomain.com`
 
 5. **Deploy** - Vercel จะ build และ deploy อัตโนมัติ
 
@@ -61,8 +116,11 @@ Vercel เป็น platform ที่สร้างโดยทีม Next.js 
 - ✅ HTTPS และ CDN รวมอยู่แล้ว
 - ✅ ฟรีสำหรับ personal projects
 
-#### ข้อจำกัด:
-- MinIO ต้อง deploy แยก (ไม่สามารถรัน MinIO บน Vercel ได้)
+#### ข้อดีของ Firebase Storage:
+- ✅ ไฟล์เก็บถาวร ไม่หายหลัง deploy
+- ✅ ไม่ต้องตั้งค่า server แยก
+- ✅ ใช้ Firebase project เดียวกับ Firestore
+- ✅ CDN และ HTTPS รวมอยู่แล้ว
 
 ---
 
@@ -215,16 +273,42 @@ MinIO ต้อง deploy แยกจาก Next.js เพราะมันเ
 
 ## Environment Variables ที่ต้องตั้งค่า
 
-| Variable | คำอธิบาย | ตัวอย่าง Production Value |
-|----------|----------|---------------------------|
-| `MINIO_ENDPOINT` | MinIO server endpoint | `minio.yourdomain.com` |
-| `MINIO_PORT` | MinIO port | `9000` (หรือ `443` ถ้าใช้ SSL) |
-| `MINIO_USE_SSL` | ใช้ HTTPS หรือไม่ | `true` |
-| `MINIO_ACCESS_KEY` | MinIO access key | (ตั้งค่าเอง) |
-| `MINIO_SECRET_KEY` | MinIO secret key | (ตั้งค่าเอง - ต้องเก็บเป็นความลับ) |
-| `MINIO_BUCKET` | Bucket name | `issue-uploads` |
-| `MINIO_PUBLIC_URL` | Public URL สำหรับเข้าถึงไฟล์ | `https://minio.yourdomain.com` |
-| `NEXT_PUBLIC_APP_URL` | URL ของแอปของคุณ | `https://yourdomain.com` |
+| Variable | คำอธิบาย | วิธีหา/ตั้งค่า | ตัวอย่าง Production Value |
+|----------|----------|----------------|---------------------------|
+| `MINIO_ENDPOINT` | MinIO server endpoint | ตั้งเมื่อ deploy MinIO server | `minio.yourdomain.com` หรือ IP `192.168.1.100` |
+| `MINIO_PORT` | MinIO port | Default: `9000`, ถ้าใช้ HTTPS: `443` | `9000` หรือ `443` |
+| `MINIO_USE_SSL` | ใช้ HTTPS หรือไม่ | `true` สำหรับ production, `false` สำหรับ dev | `true` |
+| `MINIO_ACCESS_KEY` | MinIO access key | ตั้งเมื่อติดตั้ง MinIO (หรือใช้ default: `minioadmin`) | ตั้งเอง (อย่าใช้ default ใน production!) |
+| `MINIO_SECRET_KEY` | MinIO secret key | ตั้งเมื่อติดตั้ง MinIO (หรือใช้ default: `minioadmin`) | ตั้งเอง (เก็บเป็นความลับ!) |
+| `MINIO_BUCKET` | Bucket name สำหรับเก็บไฟล์ | ตั้งชื่อเอง หรือใช้ default | `issue-uploads` |
+| `MINIO_PUBLIC_URL` | Public URL ที่เข้าถึงไฟล์ได้ | URL ที่ point ไปยัง MinIO server (ต้องเข้าถึงได้จาก internet) | `https://storage.yourdomain.com` |
+| `NEXT_PUBLIC_APP_URL` | URL ของ Next.js app | URL ที่ deploy แล้ว (จาก Vercel หรือ domain ของคุณ) | `https://yourdomain.com` หรือ `https://app.vercel.app` |
+
+### รายละเอียดเพิ่มเติม
+
+#### 1. MinIO Environment Variables
+
+**ถ้าคุณใช้ MinIO (Object Storage)**:
+- MinIO คือ self-hosted object storage (คล้าย AWS S3)
+- ต้อง deploy MinIO server แยกจาก Next.js
+- ใช้สำหรับเก็บไฟล์ภาพที่อัปโหลด
+
+**วิธีหาค่า MinIO**:
+- ถ้า deploy MinIO เอง: ตั้งค่า ACCESS_KEY และ SECRET_KEY เองเมื่อติดตั้ง
+- ถ้าใช้ MinIO Cloud: ใช้ credentials ที่ได้จาก MinIO Cloud dashboard
+- ถ้าใช้ AWS S3 หรือบริการอื่น: ต้องแก้โค้ดให้รองรับ (ไม่แนะนำตอนนี้)
+
+**ถ้าไม่อยากตั้ง MinIO** (แนะนำสำหรับผู้เริ่มต้น):
+- ใช้ **Firebase Storage** แทน (ง่ายกว่า ไม่ต้องตั้ง server แยก)
+- Firebase Storage ทำงานกับ Firebase project ที่มีอยู่แล้ว
+- ต้องแก้โค้ดใน `src/lib/upload.ts` และ `src/app/api/upload/route.ts`
+
+#### 2. NEXT_PUBLIC_APP_URL
+
+**วิธีหา**:
+- ถ้า deploy บน Vercel: ใช้ URL ที่ Vercel ให้มา เช่น `https://your-app-name.vercel.app`
+- ถ้ามี custom domain: ใช้ domain ที่ตั้งค่า เช่น `https://yourdomain.com`
+- ใช้ URL นี้เพื่อให้แอปรู้ว่า URL ของตัวเองคืออะไร (สำหรับสร้าง absolute URLs)
 
 **หมายเหตุ**: Firebase config ถูก hardcode ใน `src/lib/firebase.ts` แล้ว ไม่ต้องตั้งค่า environment variable
 
