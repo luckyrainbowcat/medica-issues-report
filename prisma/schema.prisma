@@ -1,0 +1,42 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Component {
+  id        String   @id @default(uuid())
+  name      String
+  parentId  String?
+  path      String   @default("[]") // SQLite stores array as JSON string
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent   Component? @relation("ComponentParent", fields: [parentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  children Component[] @relation("ComponentParent")
+  issues   Issue[]
+
+  @@map("components")
+}
+
+model Issue {
+  id           String   @id @default(uuid())
+  title        String
+  status       String   @default("OPEN") // SQLite doesn't support enums, use String
+  priority     String   @default("MED")  // SQLite doesn't support enums, use String
+  componentId  String?
+  componentPath String  @default("[]") // SQLite stores array as JSON string
+  description  String?  // SQLite stores JSON as TEXT
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  component Component? @relation(fields: [componentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@map("issues")
+}

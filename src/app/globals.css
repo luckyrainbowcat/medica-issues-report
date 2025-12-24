@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tiptap Editor Styles */
+.ProseMirror {
+  outline: none;
+}
+
+.ProseMirror p {
+  margin: 0.5em 0;
+}
+
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.ProseMirror img:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  transform: scale(1.01);
+}
+
+.ProseMirror img:active {
+  transform: scale(0.98);
+}
+
+.ProseMirror h1 {
+  font-size: 2em;
+  font-weight: bold;
+  margin: 0.5em 0;
+}
+
+.ProseMirror h2 {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin: 0.5em 0;
+}
+
+.ProseMirror h3 {
+  font-size: 1.25em;
+  font-weight: bold;
+  margin: 0.5em 0;
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.ProseMirror blockquote {
+  border-left: 3px solid #ccc;
+  padding-left: 1em;
+  margin: 0.5em 0;
+  font-style: italic;
+}
+
+.ProseMirror code {
+  background-color: #f4f4f4;
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.ProseMirror pre {
+  background-color: #f4f4f4;
+  padding: 1em;
+  border-radius: 5px;
+  overflow-x: auto;
+}
+
+.ProseMirror pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+/* Fix for drag and drop not blocking clicks */
+.drag-handle {
+  pointer-events: auto !important;
+  z-index: 10;
+}
+
+/* Ensure buttons and form elements are clickable */
+button,
+input,
+select,
+textarea,
+a {
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 10;
+  cursor: pointer;
+}
+
+/* Ensure toolbar buttons are always clickable */
+.bg-gray-100 button,
+.bg-gray-100 input,
+.bg-gray-100 select,
+.bg-gray-100 a {
+  z-index: 50;
+  pointer-events: auto !important;
+}
+
+/* Ensure page is scrollable */
+html, body {
+  overflow-x: auto;
+  overflow-y: auto;
+  height: 100%;
+}
+
+/* Fix for DndContext not blocking interactions */
+[data-rbd-droppable-id] {
+  pointer-events: auto;
+}
+
