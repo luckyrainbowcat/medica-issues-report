@@ -17,30 +17,23 @@ export function getAdminApp(): App {
     return adminApp;
   }
 
-  // Initialize with service account if available, otherwise use default credentials
-  try {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+  // Initialize with service account if available
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+    try {
       // Use service account from environment variable (JSON string)
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
       adminApp = initializeApp({
         credential: cert(serviceAccount),
         storageBucket: 'medica-issuev2.firebasestorage.app',
       });
-    } else {
-      // Use Application Default Credentials (works on Vercel with GOOGLE_APPLICATION_CREDENTIALS)
-      // Or use project ID for emulator/testing
-      adminApp = initializeApp({
-        projectId: 'medica-issuev2',
-        storageBucket: 'medica-issuev2.firebasestorage.app',
-      });
+      return adminApp;
+    } catch (error: any) {
+      // If JSON parsing fails, throw error
+      throw new Error(`Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY: ${error.message}`);
     }
-  } catch (error: any) {
-    // If initialization fails, try without credentials (for local development)
-    console.warn('Firebase Admin initialization warning:', error.message);
-    adminApp = initializeApp({
-      projectId: 'medica-issuev2',
-      storageBucket: 'medica-issuev2.firebasestorage.app',
-    });
+  } else {
+    // No credentials available - this is OK for local development (will fallback to local storage)
+    throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY is not set. Using local file storage fallback.');
   }
 
   return adminApp;
