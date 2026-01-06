@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import IssueEditor from '@/components/IssueEditor';
 
@@ -8,7 +9,8 @@ interface Issue {
   _id: string;
   title: string;
   status: string;
-  priority: string;
+  priority: 'LOW' | 'MED' | 'HIGH';
+  urgency?: 'URGENT_EASY' | 'URGENT_HARD' | 'NOT_URGENT_EASY' | 'NOT_URGENT_HARD' | null;
   componentPath: string[];
   description: any;
   type?: 'internal' | 'external';
@@ -18,6 +20,11 @@ interface Issue {
   parentIssueId?: string | null;
   hospital?: string;
   department?: string;
+  issueType?: string;
+  reportedAt?: Date | string;
+  assignedAt?: Date | string;
+  closedAt?: Date | string;
+  subIssuesCount?: number;
 }
 
 interface User {
@@ -25,6 +32,394 @@ interface User {
   username: string;
   name: string;
 }
+
+function SubIssuePendingStatusDropdown({ issueId, currentStatus, onStatusChange }: { issueId: string; currentStatus?: string; onStatusChange: (status: string | null) => Promise<void> }) {
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node) &&
+          dropdownMenuRef.current && !dropdownMenuRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    if (showDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDropdown]);
+
+  useEffect(() => {
+    if (showDropdown && buttonRef.current && dropdownMenuRef.current) {
+      const buttonRect = buttonRef.current.getBoundingClientRect();
+      dropdownMenuRef.current.style.top = `${buttonRect.bottom + 4}px`;
+      dropdownMenuRef.current.style.left = `${buttonRect.left}px`;
+    }
+  }, [showDropdown]);
+
+  const displayText = currentStatus === 'PROGRAMMER_PENDING' 
+    ? 'PROGRAMMER PENDING' 
+    : currentStatus === 'ONSITE_PENDING' 
+    ? 'ONSITE PENDING' 
+    : 'Pending Status';
+
+  const buttonClass = currentStatus === 'PROGRAMMER_PENDING'
+    ? 'px-2 py-1 rounded text-xs bg-purple-100 text-purple-800 hover:bg-purple-200 whitespace-nowrap'
+    : currentStatus === 'ONSITE_PENDING'
+    ? 'px-2 py-1 rounded text-xs bg-blue-100 text-blue-800 hover:bg-blue-200 whitespace-nowrap'
+    : 'px-2 py-1 rounded text-xs bg-gray-100 text-gray-800 hover:bg-gray-200 whitespace-nowrap';
+
+  return (
+    <>
+      <div className="relative" ref={dropdownRef}>
+        <button
+          ref={buttonRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowDropdown(!showDropdown);
+          }}
+          className={buttonClass}
+        >
+          {displayText}
+        </button>
+      </div>
+      {showDropdown && typeof document !== 'undefined' && createPortal(
+        <div 
+          ref={dropdownMenuRef}
+          className="fixed bg-white border rounded shadow-lg z-[9999] min-w-[180px]"
+          style={{ 
+            top: buttonRef.current ? `${buttonRef.current.getBoundingClientRect().bottom + 4}px` : '0px',
+            left: buttonRef.current ? `${buttonRef.current.getBoundingClientRect().left}px` : '0px'
+          }}
+        >
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              await onStatusChange('PROGRAMMER_PENDING');
+              setShowDropdown(false);
+            }}
+            className="w-full px-3 py-2 text-left text-xs hover:bg-purple-50 text-purple-800"
+          >
+            PROGRAMMER PENDING
+          </button>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              await onStatusChange('ONSITE_PENDING');
+              setShowDropdown(false);
+            }}
+            className="w-full px-3 py-2 text-left text-xs hover:bg-blue-50 text-blue-800"
+          >
+            ONSITE PENDING
+          </button>
+          {(currentStatus === 'PROGRAMMER_PENDING' || currentStatus === 'ONSITE_PENDING') && (
+            <button
+              onClick={async (e) => {
+                e.stopPropagation();
+                await onStatusChange(null);
+                setShowDropdown(false);
+              }}
+              className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50 text-gray-600 border-t border-gray-200"
+            >
+              ลบออก
+            </button>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+function PriorityDropdown({ issueId, currentPriority, onPriorityChange }: { issueId: string; currentPriority?: 'LOW' | 'MED' | 'HIGH'; onPriorityChange?: (priority: 'LOW' | 'MED' | 'HIGH') => Promise<void> }) {
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node) &&
+          dropdownMenuRef.current && !dropdownMenuRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    if (showDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDropdown]);
+
+  useEffect(() => {
+    if (showDropdown && buttonRef.current && dropdownMenuRef.current) {
+      const buttonRect = buttonRef.current.getBoundingClientRect();
+      dropdownMenuRef.current.style.top = `${buttonRect.bottom + 4}px`;
+      dropdownMenuRef.current.style.left = `${buttonRect.left}px`;
+    }
+  }, [showDropdown]);
+
+  const handlePriorityChange = async (priority: 'LOW' | 'MED' | 'HIGH') => {
+    setShowDropdown(false);
+    if (onPriorityChange) {
+      await onPriorityChange(priority);
+    } else {
+      try {
+        const response = await fetch(`/api/issues/${issueId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ priority }),
+        });
+        if (response.ok) {
+          window.location.reload();
+        }
+      } catch (error) {
+        console.error('Error updating priority:', error);
+      }
+    }
+  };
+
+  // Get button class based on priority
+  const getPriorityButtonClass = (priority: 'LOW' | 'MED' | 'HIGH' | undefined): string => {
+    if (priority === 'LOW') {
+      return 'px-3 py-1 rounded text-sm bg-yellow-100 text-yellow-800 hover:bg-yellow-200 cursor-pointer';
+    } else if (priority === 'MED') {
+      return 'px-3 py-1 rounded text-sm bg-orange-100 text-orange-800 hover:bg-orange-200 cursor-pointer';
+    } else {
+      return 'px-3 py-1 rounded text-sm bg-red-100 text-red-800 hover:bg-red-200 cursor-pointer';
+    }
+  };
+
+  // Get display text
+  const getPriorityDisplayText = (priority: 'LOW' | 'MED' | 'HIGH' | undefined): string => {
+    if (priority === 'LOW') return 'ต่ำ';
+    if (priority === 'MED') return 'ปานกลาง';
+    if (priority === 'HIGH') return 'สูง';
+    return 'เลือกความสำคัญ';
+  };
+
+  const displayText = getPriorityDisplayText(currentPriority);
+  const buttonClass = getPriorityButtonClass(currentPriority);
+
+  return (
+    <>
+      <div className="relative" ref={dropdownRef}>
+        <button
+          ref={buttonRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowDropdown(!showDropdown);
+          }}
+          className={buttonClass}
+        >
+          {displayText}
+        </button>
+      </div>
+      {showDropdown && typeof document !== 'undefined' && createPortal(
+        <div 
+          ref={dropdownMenuRef}
+          className="fixed bg-white border rounded shadow-lg z-[9999] min-w-[180px]"
+          style={{ 
+            top: buttonRef.current ? `${buttonRef.current.getBoundingClientRect().bottom + 4}px` : '0px',
+            left: buttonRef.current ? `${buttonRef.current.getBoundingClientRect().left}px` : '0px'
+          }}
+        >
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePriorityChange('LOW');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-yellow-50 text-yellow-800"
+          >
+            ต่ำ
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePriorityChange('MED');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-800"
+          >
+            ปานกลาง
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePriorityChange('HIGH');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 text-red-800"
+          >
+            สูง
+          </button>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+function UrgencyDropdown({ issueId, currentUrgency, onUrgencyChange }: { issueId: string; currentUrgency?: string | null; onUrgencyChange?: (urgency: string | null) => Promise<void> }) {
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node) &&
+          dropdownMenuRef.current && !dropdownMenuRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    if (showDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDropdown]);
+
+  useEffect(() => {
+    if (showDropdown && buttonRef.current && dropdownMenuRef.current) {
+      const buttonRect = buttonRef.current.getBoundingClientRect();
+      dropdownMenuRef.current.style.top = `${buttonRect.bottom + 4}px`;
+      dropdownMenuRef.current.style.left = `${buttonRect.left}px`;
+    }
+  }, [showDropdown]);
+
+  const handleUrgencyChange = async (urgency: string | null) => {
+    setShowDropdown(false);
+    if (onUrgencyChange) {
+      await onUrgencyChange(urgency);
+    } else {
+      try {
+        const response = await fetch(`/api/issues/${issueId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urgency }),
+        });
+        if (response.ok) {
+          window.location.reload();
+        }
+      } catch (error) {
+        console.error('Error updating urgency:', error);
+      }
+    }
+  };
+
+  // Mapping urgency values to display text
+  const getUrgencyDisplayText = (urgency: string | null | undefined): string => {
+    if (!urgency) return 'เลือกความเร่งด่วน';
+    const urgencyMap: { [key: string]: string } = {
+      'URGENT_EASY': 'ด่วน-ง่าย',
+      'URGENT_HARD': 'ด่วน-ยาก',
+      'NOT_URGENT_EASY': 'ไม่ด่วน-ง่าย',
+      'NOT_URGENT_HARD': 'ไม่ด่วน-ยาก',
+    };
+    return urgencyMap[urgency] || urgency;
+  };
+
+  // Get button class based on urgency
+  const getUrgencyButtonClass = (urgency: string | null | undefined): string => {
+    if (!urgency) {
+      return 'px-3 py-1 rounded text-sm bg-gray-100 text-gray-800 hover:bg-gray-200 cursor-pointer';
+    }
+    if (urgency === 'URGENT_EASY') {
+      return 'px-3 py-1 rounded text-sm bg-red-100 text-red-800 hover:bg-red-200 cursor-pointer';
+    } else if (urgency === 'URGENT_HARD') {
+      return 'px-3 py-1 rounded text-sm bg-orange-100 text-orange-800 hover:bg-orange-200 cursor-pointer';
+    } else if (urgency === 'NOT_URGENT_HARD') {
+      return 'px-3 py-1 rounded text-sm bg-orange-100 text-orange-800 hover:bg-orange-200 cursor-pointer';
+    } else {
+      return 'px-3 py-1 rounded text-sm bg-yellow-100 text-yellow-800 hover:bg-yellow-200 cursor-pointer';
+    }
+  };
+
+  const displayText = getUrgencyDisplayText(currentUrgency);
+  const buttonClass = getUrgencyButtonClass(currentUrgency);
+
+  return (
+    <>
+      <div className="relative" ref={dropdownRef}>
+        <button
+          ref={buttonRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowDropdown(!showDropdown);
+          }}
+          className={buttonClass}
+        >
+          {displayText}
+        </button>
+      </div>
+      {showDropdown && typeof document !== 'undefined' && createPortal(
+        <div 
+          ref={dropdownMenuRef}
+          className="fixed bg-white border rounded shadow-lg z-[9999] min-w-[180px]"
+          style={{ 
+            top: buttonRef.current ? `${buttonRef.current.getBoundingClientRect().bottom + 4}px` : '0px',
+            left: buttonRef.current ? `${buttonRef.current.getBoundingClientRect().left}px` : '0px'
+          }}
+        >
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleUrgencyChange('URGENT_EASY');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 text-red-800"
+          >
+            ด่วน-ง่าย
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleUrgencyChange('URGENT_HARD');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-800"
+          >
+            ด่วน-ยาก
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleUrgencyChange('NOT_URGENT_EASY');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-yellow-50 text-yellow-800"
+          >
+            ไม่ด่วน-ง่าย
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleUrgencyChange('NOT_URGENT_HARD');
+            }}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-800"
+          >
+            ไม่ด่วน-ยาก
+          </button>
+          {currentUrgency && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleUrgencyChange(null);
+              }}
+              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 text-gray-600 border-t border-gray-200"
+            >
+              ลบออก
+            </button>
+          )}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+// Helper function to truncate text to 40 characters
+const truncateTitle = (title: string, maxLength: number = 40): string => {
+  if (title.length <= maxLength) return title;
+  return title.substring(0, maxLength) + '...';
+};
 
 export default function IssueDetailPage() {
   const params = useParams();
@@ -46,11 +441,11 @@ export default function IssueDetailPage() {
   const [editHospital, setEditHospital] = useState('');
   const [editDepartment, setEditDepartment] = useState('');
   const [editComponentPath, setEditComponentPath] = useState('');
-  const [editPriority, setEditPriority] = useState<'LOW' | 'MED' | 'HIGH'>('MED');
   
   // Create sub-issue form states
   const [newSubIssueTitle, setNewSubIssueTitle] = useState('');
   const [newSubIssuePriority, setNewSubIssuePriority] = useState<'LOW' | 'MED' | 'HIGH'>('MED');
+  const [newSubIssueUrgency, setNewSubIssueUrgency] = useState<'URGENT_EASY' | 'URGENT_HARD' | 'NOT_URGENT_EASY' | 'NOT_URGENT_HARD' | null>(null);
   const [newSubIssueReporterName, setNewSubIssueReporterName] = useState('');
   const [newSubIssueAssignedTo, setNewSubIssueAssignedTo] = useState('');
   
@@ -58,6 +453,11 @@ export default function IssueDetailPage() {
   const [subIssueAction, setSubIssueAction] = useState<{ id: string; type: 'accept' | 'done' } | null>(null);
   const [subIssueAssignedToName, setSubIssueAssignedToName] = useState('');
   const [subIssueClosedByName, setSubIssueClosedByName] = useState('');
+  
+  // Pending status dropdown state
+  const [showPendingDropdown, setShowPendingDropdown] = useState(false);
+  const pendingButtonRef = useRef<HTMLButtonElement>(null);
+  const pendingDropdownRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
     fetchIssue();
@@ -137,7 +537,6 @@ export default function IssueDetailPage() {
       setEditHospital(data.hospital || '');
       setEditDepartment(data.department || '');
       setEditComponentPath(data.componentPath && data.componentPath.length > 0 ? data.componentPath.join(' > ') : '');
-      setEditPriority(data.priority || 'MED');
     } catch (error: any) {
       console.error('Error fetching issue:', error);
       alert(`ไม่สามารถโหลด Issue ได้: ${error.message || 'Unknown error'}`);
@@ -200,6 +599,8 @@ export default function IssueDetailPage() {
       setIssue(updated);
       setIsEditingDescription(false);
       await fetchIssue();
+      // แจ้งเตือนเมื่อบันทึกสำเร็จ
+      alert('บันทึกข้อมูลสำเร็จ');
     } catch (error: any) {
       console.error('Error saving issue:', error);
       alert(`ไม่สามารถบันทึกได้: ${error.message || 'Unknown error'}`);
@@ -207,7 +608,7 @@ export default function IssueDetailPage() {
     }
   };
 
-  const handleUpdateField = async (field: string, value: string) => {
+  const handleUpdateField = async (field: string, value: string | null) => {
     if (!issue) return;
 
     // Check if trying to close issue - must close all sub-issues first
@@ -305,6 +706,8 @@ export default function IssueDetailPage() {
 
       await fetchIssue();
       setEditingField(null);
+      // แจ้งเตือนเมื่อบันทึกสำเร็จ
+      alert('บันทึกข้อมูลสำเร็จ');
     } catch (error: any) {
       alert(`ไม่สามารถอัปเดตได้: ${error.message}`);
     }
@@ -384,14 +787,18 @@ export default function IssueDetailPage() {
       const issueData: any = {
         title: newSubIssueTitle,
         priority: newSubIssuePriority,
+        urgency: newSubIssueUrgency,
         type: issue.type || 'internal',
         parentIssueId: issue._id,
         componentId: null,
       };
 
       // สำหรับทั้ง internal และ external ต้องมี reporterName
-      // ถ้ามี user login อยู่ ให้ใช้ชื่อ user เป็นผู้แจ้งปัญหา
-      const reporterName = currentUser ? currentUser.name : newSubIssueReporterName;
+      // ถ้ามี user login อยู่และไม่ใช่ guest ให้ใช้ชื่อ user เป็นผู้แจ้งปัญหา
+      // ถ้าเป็น guest หรือไม่มี user ให้ใช้ชื่อที่กรอกมา
+      const reporterName = (currentUser && currentUser._id !== 'guest' && currentUser.name)
+        ? currentUser.name
+        : newSubIssueReporterName;
       if (reporterName) issueData.reporterName = reporterName;
       // Don't set assignedTo when creating - it should be set via Accept button
 
@@ -405,6 +812,7 @@ export default function IssueDetailPage() {
         setShowCreateSubIssue(false);
         setNewSubIssueTitle('');
         setNewSubIssuePriority('MED');
+        setNewSubIssueUrgency(null);
         setNewSubIssueReporterName('');
         setNewSubIssueAssignedTo('');
         // Refresh both issue and sub-issues
@@ -430,74 +838,186 @@ export default function IssueDetailPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b p-4 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-white border-b p-2 sm:p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-4 mb-4">
           <button
-            onClick={() => router.push('/')}
-            className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
+            onClick={() => {
+              // เก็บ currentType จาก issue.type หรือจาก localStorage
+              if (issue && issue.type) {
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('currentIssueType', issue.type);
+                }
+              }
+              // ตรวจสอบว่ามาจากหน้าไหน
+              const returnToPage = typeof window !== 'undefined' ? sessionStorage.getItem('returnToPage') : null;
+              if (returnToPage === '/list') {
+                router.push('/list');
+              } else {
+                router.push('/');
+              }
+            }}
+            className="px-3 sm:px-4 py-1.5 sm:py-2 bg-gray-200 rounded hover:bg-gray-300 text-sm sm:text-base self-start"
           >
-            ← กลับไปยัง Board
+            ← กลับ
           </button>
-          <div className="flex gap-2">
-            <span className={`px-3 py-1 rounded text-sm ${
-              issue.status === 'OPEN' ? 'bg-yellow-100 text-yellow-800' :
-              issue.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-800' :
-              'bg-green-100 text-green-800'
-            }`}>
-              {issue.status.replace('_', ' ')}
-            </span>
-            {issue.status !== 'DONE' && (
-              editingField === 'priority' ? (
-                <div className="inline-flex items-center gap-2">
-                  <select
-                    value={editPriority}
-                    onChange={(e) => setEditPriority(e.target.value as 'LOW' | 'MED' | 'HIGH')}
-                    className="px-2 py-1 border rounded text-sm"
-                  >
-                    <option value="LOW">LOW</option>
-                    <option value="MED">MED</option>
-                    <option value="HIGH">HIGH</option>
-                  </select>
-                  <button
-                    onClick={() => handleUpdateField('priority', editPriority)}
-                    className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
-                  >
-                    บันทึก
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditPriority(issue.priority || 'MED');
-                      setEditingField(null);
-                    }}
-                    className="px-2 py-1 bg-gray-300 rounded text-xs"
-                  >
-                    ยกเลิก
-                  </button>
-                </div>
-              ) : (
+          <div className="flex flex-wrap gap-2">
+            {editingField === 'status' ? (
+              <div className="inline-flex items-center gap-2">
+                <select
+                  value={issue.status}
+                  onChange={(e) => {
+                    handleUpdateField('status', e.target.value);
+                    setEditingField(null);
+                  }}
+                  className="px-2 py-1 border rounded text-sm"
+                  autoFocus
+                >
+                  <option value="OPEN">OPEN</option>
+                  <option value="PROGRAMMER_PENDING">PROGRAMMER PENDING</option>
+                  <option value="ONSITE_PENDING">ONSITE PENDING</option>
+                  <option value="IN_PROGRESS">IN_PROGRESS</option>
+                  <option value="DONE">DONE</option>
+                </select>
+                <button
+                  onClick={() => setEditingField(null)}
+                  className="px-2 py-1 bg-gray-300 rounded text-xs"
+                >
+                  ยกเลิก
+                </button>
+              </div>
+            ) : (
+              // แสดง status span เฉพาะเมื่อเป็น IN_PROGRESS หรือ DONE
+              // เพราะ OPEN, PROGRAMMER_PENDING, ONSITE_PENDING จะมี pending status dropdown แสดงแทน
+              (issue.status === 'IN_PROGRESS' || issue.status === 'DONE') ? (
                 <span 
                   className={`px-3 py-1 rounded text-sm cursor-pointer hover:underline ${
-                    issue.priority === 'LOW' ? 'bg-yellow-100 text-yellow-800' :
-                    issue.priority === 'MED' ? 'bg-orange-100 text-orange-800' :
-                    'bg-red-100 text-red-800'
+                    issue.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-800' :
+                    'bg-green-100 text-green-800'
                   }`}
-                  onClick={() => setEditingField('priority')}
+                  onClick={() => setEditingField('status')}
                 >
-                  {issue.priority}
+                  {issue.status.replace(/_/g, ' ')}
                 </span>
-              )
+              ) : null
+            )}
+            {issue.status !== 'DONE' && (
+              <>
+                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  <PriorityDropdown 
+                    issueId={issue._id} 
+                    currentPriority={issue.priority}
+                    onPriorityChange={async (priority: 'LOW' | 'MED' | 'HIGH') => {
+                      try {
+                        const response = await fetch(`/api/issues/${issue._id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ priority }),
+                        });
+                        if (response.ok) {
+                          await fetchIssue();
+                        }
+                      } catch (error) {
+                        console.error('Error updating priority:', error);
+                      }
+                    }}
+                  />
+                  <UrgencyDropdown 
+                    issueId={issue._id} 
+                    currentUrgency={issue.urgency}
+                    onUrgencyChange={async (urgency: string | null) => {
+                      try {
+                        const response = await fetch(`/api/issues/${issue._id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ urgency }),
+                        });
+                        if (response.ok) {
+                          await fetchIssue();
+                        }
+                      } catch (error) {
+                        console.error('Error updating urgency:', error);
+                      }
+                    }}
+                  />
+                </div>
+                {/* แสดงปุ่มเลือก Pending Status เมื่อ status เป็น OPEN, IN_PROGRESS, PROGRAMMER_PENDING หรือ ONSITE_PENDING */}
+                {(issue.status === 'OPEN' || issue.status === 'IN_PROGRESS' || issue.status === 'PROGRAMMER_PENDING' || issue.status === 'ONSITE_PENDING') && (
+                  <>
+                    <div className="relative">
+                      <button
+                        ref={pendingButtonRef}
+                        onClick={() => setShowPendingDropdown(!showPendingDropdown)}
+                        className={`px-3 py-1 rounded text-sm cursor-pointer ${
+                          issue.status === 'PROGRAMMER_PENDING'
+                            ? 'bg-purple-100 text-purple-800 hover:bg-purple-200'
+                            : issue.status === 'ONSITE_PENDING'
+                            ? 'bg-blue-100 text-blue-800 hover:bg-blue-200'
+                            : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                        }`}
+                      >
+                        {issue.status === 'PROGRAMMER_PENDING' 
+                          ? 'PROGRAMMER PENDING' 
+                          : issue.status === 'ONSITE_PENDING' 
+                          ? 'ONSITE PENDING' 
+                          : 'Pending Status'}
+                      </button>
+                    </div>
+                    {showPendingDropdown && typeof document !== 'undefined' && createPortal(
+                      <div 
+                        ref={pendingDropdownRef}
+                        className="fixed bg-white border rounded shadow-lg z-[9999] min-w-[180px]"
+                        style={{ 
+                          top: pendingButtonRef.current ? `${pendingButtonRef.current.getBoundingClientRect().bottom + 4}px` : '0px',
+                          left: pendingButtonRef.current ? `${pendingButtonRef.current.getBoundingClientRect().left}px` : '0px'
+                        }}
+                      >
+                        <button
+                          onClick={() => {
+                            handleUpdateField('status', 'PROGRAMMER_PENDING');
+                            setShowPendingDropdown(false);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 text-purple-800"
+                        >
+                          PROGRAMMER PENDING
+                        </button>
+                        <button
+                          onClick={() => {
+                            handleUpdateField('status', 'ONSITE_PENDING');
+                            setShowPendingDropdown(false);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 text-blue-800"
+                        >
+                          ONSITE PENDING
+                        </button>
+                        {(issue.status === 'PROGRAMMER_PENDING' || issue.status === 'ONSITE_PENDING') && (
+                          <button
+                            onClick={() => {
+                              handleUpdateField('status', 'OPEN');
+                              setShowPendingDropdown(false);
+                            }}
+                            className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 text-gray-600 border-t border-gray-200"
+                          >
+                            ลบออก
+                          </button>
+                        )}
+                      </div>,
+                      document.body
+                    )}
+                  </>
+                )}
+              </>
             )}
           </div>
         </div>
         
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mb-4">
           {editingField === 'title' ? (
-            <div className="flex-1 flex items-center gap-2">
+            <div className="flex-1 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <input
                 type="text"
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
-                className="flex-1 px-3 py-2 border rounded text-2xl font-bold"
+                className="flex-1 px-3 py-2 border rounded text-lg sm:text-xl md:text-2xl font-bold"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     handleUpdateField('title', editTitle);
@@ -508,34 +1028,36 @@ export default function IssueDetailPage() {
                 }}
                 autoFocus
               />
-              <button
-                onClick={() => handleUpdateField('title', editTitle)}
-                className="px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-              >
-                บันทึก
-              </button>
-              <button
-                onClick={() => {
-                  setEditingField(null);
-                  setEditTitle(issue.title);
-                }}
-                className="px-3 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
-              >
-                ยกเลิก
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleUpdateField('title', editTitle)}
+                  className="flex-1 sm:flex-none px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 text-sm"
+                >
+                  บันทึก
+                </button>
+                <button
+                  onClick={() => {
+                    setEditingField(null);
+                    setEditTitle(issue.title);
+                  }}
+                  className="flex-1 sm:flex-none px-3 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400 text-sm"
+                >
+                  ยกเลิก
+                </button>
+              </div>
             </div>
           ) : (
             <>
-              <h1 className="text-2xl font-bold flex-1">{issue.title}</h1>
+              <h1 className="text-lg sm:text-xl md:text-2xl font-bold flex-1 break-words">{issue.title}</h1>
               <button
                 onClick={() => {
                   setEditingField('title');
                   setEditTitle(issue.title);
                 }}
-                className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded"
+                className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded self-start sm:self-auto"
                 title="แก้ไขชื่อปัญหา"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
               </button>
@@ -543,7 +1065,13 @@ export default function IssueDetailPage() {
           )}
         </div>
         
-        <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 text-xs sm:text-sm">
+          {issue.issueType && (
+            <div>
+              <span className="font-medium">ประเภทปัญหา: </span>
+              <span>{issue.issueType === 'software' ? 'Software' : issue.issueType === 'hardware' ? 'Hardware' : issue.issueType}</span>
+            </div>
+          )}
           <div>
             <span className="font-medium">Component: </span>
             {editingField === 'componentPath' ? (
@@ -583,107 +1111,152 @@ export default function IssueDetailPage() {
           
           {/* ผู้แจ้งปัญหา - แสดงสำหรับทั้งสองประเภท */}
           <div className="col-span-2">
-            <span className="font-medium">ผู้แจ้งปัญหา: </span>
-            {editingField === 'reporterName' ? (
-              <div className="inline-flex items-center gap-2">
-                <select
-                  value={editReporterName}
-                  onChange={(e) => setEditReporterName(e.target.value)}
-                  className="px-2 py-1 border rounded"
-                >
-                  <option value="">เลือกผู้แจ้งปัญหา</option>
-                  {users.map(u => (
-                    <option key={u._id} value={u.name}>{u.name}</option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  value={editReporterName}
-                  onChange={(e) => setEditReporterName(e.target.value)}
-                  placeholder="หรือพิมพ์ชื่อเอง"
-                  className="px-2 py-1 border rounded"
-                />
-                <button
-                  onClick={() => handleUpdateField('reporterName', editReporterName)}
-                  className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
-                >
-                  บันทึก
-                </button>
-                <button
-                  onClick={() => {
-                    setEditReporterName(issue.reporterName || '');
-                    setEditingField(null);
-                  }}
-                  className="px-2 py-1 bg-gray-300 rounded text-xs"
-                >
-                  ยกเลิก
-                </button>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="font-medium">ผู้แจ้งปัญหา: </span>
+                {editingField === 'reporterName' ? (
+                  <div className="inline-flex items-center gap-2">
+                    <input
+                      type="text"
+                      list="editReporterNameList"
+                      value={editReporterName}
+                      onChange={(e) => setEditReporterName(e.target.value)}
+                      placeholder="เลือกหรือพิมพ์ชื่อผู้แจ้งปัญหา"
+                      className="px-2 py-1 border rounded"
+                    />
+                    <datalist id="editReporterNameList">
+                      {users.map(u => (
+                        <option key={u._id} value={u.name} />
+                      ))}
+                    </datalist>
+                    <button
+                      onClick={() => handleUpdateField('reporterName', editReporterName)}
+                      className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
+                    >
+                      บันทึก
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditReporterName(issue.reporterName || '');
+                        setEditingField(null);
+                      }}
+                      className="px-2 py-1 bg-gray-300 rounded text-xs"
+                    >
+                      ยกเลิก
+                    </button>
+                  </div>
+                ) : (
+                  <span 
+                    className="cursor-pointer hover:underline"
+                    onClick={() => setEditingField('reporterName')}
+                  >
+                    {issue.reporterName || 'คลิกเพื่อเพิ่ม'}
+                  </span>
+                )}
               </div>
-            ) : (
-              <span 
-                className="cursor-pointer hover:underline"
-                onClick={() => setEditingField('reporterName')}
-              >
-                {issue.reporterName || 'คลิกเพื่อเพิ่ม'}
-              </span>
-            )}
-          </div>
-          
-          {/* ผู้รับงาน - แสดงเมื่อ status เป็น IN_PROGRESS สำหรับทั้งสองประเภท */}
-          {issue.status === 'IN_PROGRESS' && (
-            <div>
-              <span className="font-medium">ผู้รับงาน: </span>
-              {editingField === 'assignedTo' ? (
-                <div className="inline-flex items-center gap-2">
-                  <select
-                    value={editAssignedTo}
-                    onChange={(e) => setEditAssignedTo(e.target.value)}
-                    className="px-2 py-1 border rounded"
-                  >
-                    <option value="">เลือกผู้รับงาน</option>
-                    {users.map(u => (
-                      <option key={u._id} value={u.name}>{u.name}</option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={editAssignedTo}
-                    onChange={(e) => setEditAssignedTo(e.target.value)}
-                    placeholder="หรือพิมพ์ชื่อเอง"
-                    className="px-2 py-1 border rounded"
-                  />
-                  <button
-                    onClick={() => handleUpdateField('assignedTo', editAssignedTo)}
-                    className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
-                  >
-                    บันทึก
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditAssignedTo(issue.assignedTo || '');
-                      setEditingField(null);
-                    }}
-                    className="px-2 py-1 bg-gray-300 rounded text-xs"
-                  >
-                    ยกเลิก
-                  </button>
-                </div>
-              ) : (
-                <span 
-                  className="cursor-pointer hover:underline"
-                  onClick={() => setEditingField('assignedTo')}
-                >
-                  {issue.assignedTo || 'คลิกเพื่อเพิ่ม'}
+              {issue.reportedAt && (
+                <span className="text-xs text-gray-500">
+                  {new Date(issue.reportedAt).toLocaleString('th-TH', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
                 </span>
               )}
+            </div>
+          </div>
+          
+          {/* ผู้รับงาน - แสดงเมื่อ status เป็น IN_PROGRESS หรือ PROGRAMMER_PENDING หรือ ONSITE_PENDING สำหรับทั้งสองประเภท */}
+          {(issue.status === 'IN_PROGRESS' || issue.status === 'PROGRAMMER_PENDING' || issue.status === 'ONSITE_PENDING') && (
+            <div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">ผู้รับงาน: </span>
+                  {editingField === 'assignedTo' ? (
+                    <div className="inline-flex items-center gap-2">
+                      <select
+                        value={editAssignedTo}
+                        onChange={(e) => setEditAssignedTo(e.target.value)}
+                        className="px-2 py-1 border rounded"
+                      >
+                        <option value="">เลือกผู้รับงาน</option>
+                        {users.map(u => (
+                          <option key={u._id} value={u.name}>{u.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={editAssignedTo}
+                        onChange={(e) => setEditAssignedTo(e.target.value)}
+                        placeholder="หรือพิมพ์ชื่อเอง"
+                        className="px-2 py-1 border rounded"
+                      />
+                      <button
+                        onClick={() => handleUpdateField('assignedTo', editAssignedTo)}
+                        className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
+                      >
+                        บันทึก
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditAssignedTo(issue.assignedTo || '');
+                          setEditingField(null);
+                        }}
+                        className="px-2 py-1 bg-gray-300 rounded text-xs"
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  ) : (
+                    <span 
+                      className="cursor-pointer hover:underline"
+                      onClick={() => setEditingField('assignedTo')}
+                    >
+                      {(() => {
+                        // ถ้า assignedTo เป็น user ID ให้แปลงเป็นชื่อ
+                        const assignedUser = users.find(u => u._id === issue.assignedTo);
+                        return assignedUser ? assignedUser.name : (issue.assignedTo || 'คลิกเพื่อเพิ่ม');
+                      })()}
+                    </span>
+                  )}
+                </div>
+                {issue.assignedAt && (
+                  <span className="text-xs text-gray-500">
+                    {new Date(issue.assignedAt).toLocaleString('th-TH', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                )}
+              </div>
             </div>
           )}
           
           {/* ผู้ปิดงาน - แสดงเมื่อ status เป็น DONE สำหรับทั้งสองประเภท */}
           {issue.status === 'DONE' && issue.closedBy && (
             <div className="col-span-2">
-              <span className="font-medium">ผู้ปิดงาน: </span>
-              <span>{issue.closedBy}</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">ผู้ปิดงาน: </span>
+                  <span>{issue.closedBy}</span>
+                </div>
+                {issue.closedAt && (
+                  <span className="text-xs text-gray-500">
+                    {new Date(issue.closedAt).toLocaleString('th-TH', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -765,22 +1338,22 @@ export default function IssueDetailPage() {
         </div>
 
         {/* Sub-issues section */}
-        <div className="mt-6 border-t-2 border-gray-200 pt-4">
-          <div className="flex items-center justify-between mb-4">
+        <div className="mt-4 sm:mt-6 border-t-2 border-gray-200 pt-3 sm:pt-4">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4 mb-4">
             <div className="flex items-center gap-2">
-              <h3 className="text-lg font-bold text-gray-800">ปัญหาย่อย</h3>
-              <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-semibold">
+              <h3 className="text-base sm:text-lg font-bold text-gray-800">ปัญหาย่อย</h3>
+              <span className="px-2 sm:px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs sm:text-sm font-semibold">
                 {subIssues.length} ข้อ
               </span>
             </div>
             <button
               onClick={() => setShowCreateSubIssue(true)}
-              className="px-4 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600 shadow-sm transition-colors flex items-center gap-2"
+              className="px-3 sm:px-4 py-1.5 sm:py-2 bg-purple-500 text-white rounded-lg text-xs sm:text-sm font-medium hover:bg-purple-600 shadow-sm transition-colors flex items-center justify-center gap-2"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              เพิ่มปัญหาย่อย
+              <span>เพิ่มปัญหาย่อย</span>
             </button>
           </div>
           {subIssues.length > 0 ? (
@@ -795,20 +1368,25 @@ export default function IssueDetailPage() {
                     className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border-2 border-purple-200 hover:border-purple-400 hover:shadow-md transition-all"
                     onClick={(e) => {
                       if (!(e.target as HTMLElement).closest('button') && !(e.target as HTMLElement).closest('input') && !(e.target as HTMLElement).closest('select') && !(e.target as HTMLElement).closest('form')) {
+                        // เก็บข้อมูลว่ามาจากหน้าไหน (ถ้ามี)
+                        const returnToPage = typeof window !== 'undefined' ? sessionStorage.getItem('returnToPage') : null;
+                        if (returnToPage) {
+                          sessionStorage.setItem('returnToPage', returnToPage);
+                        }
                         router.push(`/issues/${subIssue._id}`);
                       }
                     }}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
                           <span className="text-xs font-semibold text-purple-600 bg-purple-100 px-2 py-0.5 rounded">
                             #{index + 1}
                           </span>
-                          <div className="flex items-center gap-2 flex-1">
-                            <h4 className="font-semibold text-gray-800">{subIssue.title}</h4>
+                          <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+                            <h4 className="font-semibold text-gray-800 break-words flex-1 min-w-0">{subIssue.title}</h4>
                             {subIssue.subIssuesCount !== undefined && subIssue.subIssuesCount > 0 && (
-                              <span className="text-xs text-purple-600 font-semibold bg-purple-100 px-2 py-0.5 rounded flex items-center gap-1">
+                              <span className="text-xs text-purple-600 font-semibold bg-purple-100 px-2 py-0.5 rounded flex items-center gap-1 flex-shrink-0">
                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                 </svg>
@@ -832,27 +1410,54 @@ export default function IssueDetailPage() {
                             <span className="font-medium">ผู้ปิดงาน:</span> {subIssue.closedBy}
                           </p>
                         )}
-                        {subIssue.priority && subIssue.status !== 'DONE' && (
-                          <span className={`inline-block text-xs px-2 py-1 rounded mt-2 ${
-                            subIssue.priority === 'LOW' ? 'bg-yellow-100 text-yellow-800' :
-                            subIssue.priority === 'MED' ? 'bg-orange-100 text-orange-800' :
-                            'bg-red-100 text-red-800'
-                          }`}>
-                            {subIssue.priority}
-                          </span>
-                        )}
                       </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <span className={`text-xs px-3 py-1 rounded-full font-semibold whitespace-nowrap ${
-                          subIssue.status === 'OPEN' ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' :
-                          subIssue.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
-                          'bg-green-100 text-green-800 border border-green-300'
-                        }`}>
-                          {subIssue.status === 'OPEN' ? 'เปิด' :
-                           subIssue.status === 'IN_PROGRESS' ? 'กำลังดำเนินการ' :
-                           'เสร็จสิ้น'}
-                        </span>
-                        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-col sm:items-end gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`text-xs px-2 sm:px-3 py-1 rounded-full font-semibold whitespace-nowrap ${
+                            subIssue.status === 'OPEN' ? 'bg-yellow-100 text-yellow-800 border border-yellow-300' :
+                            subIssue.status === 'PROGRAMMER_PENDING' ? 'bg-purple-100 text-purple-800 border border-purple-300' :
+                            subIssue.status === 'ONSITE_PENDING' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
+                            subIssue.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
+                            'bg-green-100 text-green-800 border border-green-300'
+                          }`}>
+                            {subIssue.status === 'OPEN' ? 'เปิด' :
+                             subIssue.status === 'PROGRAMMER_PENDING' ? 'PROGRAMMER PENDING' :
+                             subIssue.status === 'ONSITE_PENDING' ? 'ONSITE PENDING' :
+                             subIssue.status === 'IN_PROGRESS' ? 'กำลังดำเนินการ' :
+                             'เสร็จสิ้น'}
+                          </span>
+                          {subIssue.priority && subIssue.status !== 'DONE' && (
+                            <span className={`text-xs px-2 py-1 rounded ${
+                              subIssue.priority === 'LOW' ? 'bg-yellow-100 text-yellow-800' :
+                              subIssue.priority === 'MED' ? 'bg-orange-100 text-orange-800' :
+                              'bg-red-100 text-red-800'
+                            }`}>
+                              {subIssue.priority}
+                            </span>
+                          )}
+                          {/* แสดงปุ่มเลือก Pending Status เมื่อ status เป็น OPEN หรือ IN_PROGRESS */}
+                          {(subIssue.status === 'OPEN' || subIssue.status === 'IN_PROGRESS') && (
+                            <SubIssuePendingStatusDropdown 
+                              issueId={subIssue._id} 
+                              onStatusChange={async (status: string) => {
+                                try {
+                                  const response = await fetch(`/api/issues/${subIssue._id}`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ status }),
+                                  });
+                                  if (response.ok) {
+                                    await fetchSubIssues();
+                                    await fetchIssue();
+                                  }
+                                } catch (error) {
+                                  console.error('Error updating status:', error);
+                                }
+                              }}
+                            />
+                          )}
+                        </div>
+                        <div className="flex gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
                           {subIssue.status === 'OPEN' && !isAccepting && (
                             <button
                               onClick={(e) => {
@@ -901,26 +1506,21 @@ export default function IssueDetailPage() {
                           setSubIssueAssignedToName('');
                         }} className="space-y-2">
                           <label className="block text-xs font-medium mb-1">ผู้รับงาน *</label>
-                          <select
-                            value={subIssueAssignedToName}
-                            onChange={(e) => setSubIssueAssignedToName(e.target.value)}
-                            className="w-full px-2 py-1 border rounded text-xs"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <option value="">เลือกผู้รับงาน</option>
-                            {users.map(u => (
-                              <option key={u._id} value={u.name}>{u.name}</option>
-                            ))}
-                          </select>
                           <input
                             type="text"
+                            list={`subIssueAssignedTo-${subIssue._id}`}
                             value={subIssueAssignedToName}
                             onChange={(e) => setSubIssueAssignedToName(e.target.value)}
-                            placeholder="หรือพิมพ์ชื่อเอง"
+                            placeholder="เลือกหรือพิมพ์ชื่อผู้รับงาน"
                             className="w-full px-2 py-1 border rounded text-xs"
                             onClick={(e) => e.stopPropagation()}
                             required
                           />
+                          <datalist id={`subIssueAssignedTo-${subIssue._id}`}>
+                            {users.map(u => (
+                              <option key={u._id} value={u.name} />
+                            ))}
+                          </datalist>
                           <div className="flex gap-2 mt-2">
                             <button
                               type="submit"
@@ -959,26 +1559,21 @@ export default function IssueDetailPage() {
                           setSubIssueClosedByName('');
                         }} className="space-y-2">
                           <label className="block text-xs font-medium mb-1">ผู้ปิดงาน *</label>
-                          <select
-                            value={subIssueClosedByName}
-                            onChange={(e) => setSubIssueClosedByName(e.target.value)}
-                            className="w-full px-2 py-1 border rounded text-xs"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <option value="">เลือกผู้ปิดงาน</option>
-                            {users.map(u => (
-                              <option key={u._id} value={u.name}>{u.name}</option>
-                            ))}
-                          </select>
                           <input
                             type="text"
+                            list={`subIssueClosedBy-${subIssue._id}`}
                             value={subIssueClosedByName}
                             onChange={(e) => setSubIssueClosedByName(e.target.value)}
-                            placeholder="หรือพิมพ์ชื่อเอง"
+                            placeholder="เลือกหรือพิมพ์ชื่อผู้ปิดงาน"
                             className="w-full px-2 py-1 border rounded text-xs"
                             onClick={(e) => e.stopPropagation()}
                             required
                           />
+                          <datalist id={`subIssueClosedBy-${subIssue._id}`}>
+                            {users.map(u => (
+                              <option key={u._id} value={u.name} />
+                            ))}
+                          </datalist>
                           <div className="flex gap-2 mt-2">
                             <button
                               type="submit"
@@ -1027,8 +1622,8 @@ export default function IssueDetailPage() {
 
       {/* Create Sub-Issue Modal */}
       {showCreateSubIssue && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full mx-4 relative z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white p-4 sm:p-6 rounded-lg shadow-lg max-w-md w-full mx-2 sm:mx-4 relative z-50 max-h-[95vh] overflow-y-auto">
             <h2 className="text-xl font-bold mb-4">สร้างปัญหาย่อย</h2>
             <form onSubmit={handleCreateSubIssue} className="space-y-4">
               <div>
@@ -1053,9 +1648,23 @@ export default function IssueDetailPage() {
                   <option value="HIGH">สูง</option>
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">ระดับความยาก</label>
+                <select
+                  value={newSubIssueUrgency || ''}
+                  onChange={(e) => setNewSubIssueUrgency(e.target.value || null)}
+                  className="w-full px-3 py-2 border rounded"
+                >
+                  <option value="">-</option>
+                  <option value="URGENT_EASY">ด่วน-ง่าย</option>
+                  <option value="URGENT_HARD">ด่วน-ยาก</option>
+                  <option value="NOT_URGENT_EASY">ไม่ด่วน-ง่าย</option>
+                  <option value="NOT_URGENT_HARD">ไม่ด่วน-ยาก</option>
+                </select>
+              </div>
               {issue.type === 'internal' && (
                 <>
-                  {currentUser ? (
+                  {currentUser && currentUser._id !== 'guest' && currentUser.name ? (
                     <div>
                       <label className="block text-sm font-medium mb-1">ผู้แจ้งปัญหา</label>
                       <div className="w-full px-3 py-2 border rounded bg-gray-100 text-gray-700">
@@ -1066,23 +1675,19 @@ export default function IssueDetailPage() {
                   ) : (
                     <div>
                       <label className="block text-sm font-medium mb-1">ผู้แจ้งปัญหา</label>
-                      <select
-                        value={newSubIssueReporterName}
-                        onChange={(e) => setNewSubIssueReporterName(e.target.value)}
-                        className="w-full px-3 py-2 border rounded"
-                      >
-                        <option value="">เลือกผู้แจ้งปัญหา</option>
-                        {users.map(u => (
-                          <option key={u._id} value={u.name}>{u.name}</option>
-                        ))}
-                      </select>
                       <input
                         type="text"
+                        list="subIssueReporterNameList"
                         value={newSubIssueReporterName}
                         onChange={(e) => setNewSubIssueReporterName(e.target.value)}
-                        placeholder="หรือพิมพ์ชื่อเอง"
-                        className="w-full px-3 py-2 border rounded mt-2"
+                        placeholder="เลือกหรือพิมพ์ชื่อผู้แจ้งปัญหา"
+                        className="w-full px-3 py-2 border rounded"
                       />
+                      <datalist id="subIssueReporterNameList">
+                        {users.map(u => (
+                          <option key={u._id} value={u.name} />
+                        ))}
+                      </datalist>
                     </div>
                   )}
                 </>

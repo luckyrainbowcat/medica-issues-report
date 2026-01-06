@@ -30,7 +30,8 @@ export async function GET(request: NextRequest) {
     const issues = await getIssues(filters);
     return NextResponse.json(issues);
   } catch (error: any) {
-    console.error('Error fetching issues:', error);
+    console.error('[API /api/issues] Error fetching issues:', error);
+    console.error('[API /api/issues] Error stack:', error.stack);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest) {
       title, 
       status, 
       priority, 
+      urgency,
       componentId, 
       description,
       type,
@@ -50,7 +52,8 @@ export async function POST(request: NextRequest) {
       closedBy,
       parentIssueId,
       hospital,
-      department
+      department,
+      issueType
     } = body;
 
     if (!title) {
@@ -72,6 +75,7 @@ export async function POST(request: NextRequest) {
       title,
       status: finalStatus,
       priority: priority || 'MED',
+      urgency: urgency || null,
       componentId: componentId || null,
       componentPath,
       description,
@@ -82,6 +86,7 @@ export async function POST(request: NextRequest) {
       parentIssueId: parentIssueId || null,
       hospital,
       department,
+      issueType,
     });
 
     return NextResponse.json(issue, { status: 201 });

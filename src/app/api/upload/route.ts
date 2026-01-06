@@ -1,14 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { uploadBuffer } from '@/lib/upload';
 
-// เพิ่ม body size limit เป็น 50MB
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '50mb',
-    },
-  },
-};
+// ใน Next.js App Router ไม่ต้องใช้ config สำหรับ bodyParser
+// การตรวจสอบขนาดไฟล์ทำในโค้ดโดยตรง (ดูบรรทัด 27-31)
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,6 +28,10 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     const result = await uploadBuffer(buffer, file.type, file.name);
+
+    // ส่งกลับ relative path เพื่อให้ทำงานข้ามเครื่องได้
+    // ไม่ต้องแปลงเป็น absolute URL เพราะจะใช้ API_URL เมื่อแสดงรูปภาพ
+    // result.url ควรเป็น relative path อยู่แล้ว (เช่น /uploads/filename.jpg)
 
     return NextResponse.json(result);
   } catch (error: any) {

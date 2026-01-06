@@ -44,6 +44,7 @@ export async function PATCH(
       title, 
       status, 
       priority, 
+      urgency,
       componentId, 
       description,
       type,
@@ -52,7 +53,8 @@ export async function PATCH(
       closedBy,
       parentIssueId,
       hospital,
-      department
+      department,
+      issueType
     } = body;
 
     // Check if issue exists
@@ -66,6 +68,7 @@ export async function PATCH(
     if (title !== undefined) updateData.title = title;
     if (status !== undefined) updateData.status = status;
     if (priority !== undefined) updateData.priority = priority;
+    if (urgency !== undefined) updateData.urgency = urgency;
     if (description !== undefined) updateData.description = description;
     if (type !== undefined) updateData.type = type;
     if (reporterName !== undefined) updateData.reporterName = reporterName;
@@ -74,6 +77,7 @@ export async function PATCH(
     if (parentIssueId !== undefined) updateData.parentIssueId = parentIssueId || null;
     if (hospital !== undefined) updateData.hospital = hospital;
     if (department !== undefined) updateData.department = department;
+    if (issueType !== undefined) updateData.issueType = issueType;
 
     // If componentId changed, update componentPath
     if (componentId !== undefined) {

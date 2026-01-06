@@ -4,7 +4,11 @@ import { verifyUser } from '@/lib/firestore';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { username, password } = body;
+    let { username, password } = body;
+
+    // Trim whitespace to handle mobile keyboard issues
+    username = username?.trim();
+    password = password?.trim();
 
     if (!username || !password) {
       return NextResponse.json({ error: 'Username and password are required' }, { status: 400 });

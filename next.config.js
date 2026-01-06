@@ -1,12 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // เพิ่ม body size limit เป็น 50MB
-  api: {
-    bodyParser: {
-      sizeLimit: '50mb',
-    },
-    responseLimit: '50mb',
+  // ใน Next.js App Router ไม่ต้องใช้ api config แล้ว
+  // การจัดการ body size limit ทำใน route handler โดยตรง
+  // ปรับ CSS loading behavior เพื่อลด preload warnings
+  experimental: {
+    optimizeCss: true,
   },
 }
 

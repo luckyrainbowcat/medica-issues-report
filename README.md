@@ -1,88 +1,77 @@
-# Issue Tracker MVP
+# Issue Tracker & Service Management System
 
-Internal issue tracker web application with Kanban drag & drop, component tree, rich text editor, and image annotation.
+ระบบจัดการปัญหาและบริการสำหรับโรงพยาบาล พร้อม Kanban board, rich text editor, และ image annotation
 
 ## Features
 
-- **Kanban Board**: Drag and drop issues between columns (OPEN, IN_PROGRESS, DONE)
-- **Component Tree**: Unlimited depth component hierarchy
-- **Rich Text Editor**: Tiptap editor with image upload support
-- **Image Annotation**: Click images to annotate using TOAST UI Image Editor
+### Issues Tracker
+- **Kanban Board**: Drag and drop issues ระหว่าง columns (OPEN, IN_PROGRESS, DONE)
+- **Component Tree**: Component hierarchy แบบไม่จำกัดความลึก
+- **Rich Text Editor**: Canvas editor พร้อม image upload และ annotation
+- **Image Annotation**: วาด ตัดต่อ และ annotate รูปภาพด้วย Fabric.js
+- **Priority & Urgency**: ระบบจัดลำดับความสำคัญและความเร่งด่วน
+- **Sub-issues**: สร้างปัญหาย่อยที่เชื่อมโยงกับปัญหาหลัก
+
+### Service Management
+- **Installation Management**: จัดการข้อมูลการติดตั้งระบบ
+- **Hospital Management**: จัดการข้อมูลโรงพยาบาล
+- **Department Management**: จัดการแผนก
+- **Remote Connection**: จัดการการเชื่อมต่อรีโมต (AnyDesk, VPN)
+- **SIM Management**: จัดการข้อมูล SIM card
+- **Warranty Extension**: จัดการการต่อประกัน
+- **Connection Management**: จัดการการเชื่อมต่อระบบ (PACS, EMR, Server)
 
 ## Tech Stack
 
-- Next.js 14 (App Router) + TypeScript
-- MongoDB Community Server
-- MinIO (S3-compatible object storage)
-- Tiptap (rich text editor)
-- @dnd-kit (drag and drop)
-- TOAST UI Image Editor
+### Frontend
+- **Next.js 14** (App Router) + TypeScript
+- **React 19**
+- **Ant Design 5** (สำหรับ Service Management)
+- **Fabric.js 5** (สำหรับ Canvas editor และ image annotation)
+- **Tailwind CSS**
+
+### Backend
+- **Next.js API Routes** (สำหรับ Issues Tracker)
+- **Express.js** (สำหรับ Service Management API - port 4000)
+- **Firebase Firestore** (Database)
+- **Firebase Admin SDK** (Server-side operations)
+
+### Image Storage
+- **ImgBB API** (Free image hosting - 100% ฟรี)
+
+### Authentication
+- **JWT** (JSON Web Tokens)
+- **Cookie-based authentication**
 
 ## Prerequisites
 
-- Node.js 20 or higher
-- MongoDB Community Server
-- MinIO Server
+- **Node.js 20** หรือสูงกว่า
+- **Firebase Project** (สำหรับ Firestore)
+- **ImgBB API Key** (ฟรี - ลงทะเบียนที่ [imgbb.com](https://imgbb.com))
 
 ## Installation
 
-### 1. Install Node.js 20
+### 1. ติดตั้ง Node.js
 
-Download and install from [nodejs.org](https://nodejs.org/)
+ดาวน์โหลดและติดตั้งจาก [nodejs.org](https://nodejs.org/)
 
-### 2. Install MongoDB Community Server
+### 2. Setup Firebase
 
-**Windows:**
-1. Download from [MongoDB Download Center](https://www.mongodb.com/try/download/community)
-2. Install and start MongoDB service
-3. MongoDB will run on `localhost:27017` by default
+1. สร้าง Firebase Project ที่ [Firebase Console](https://console.firebase.google.com/)
+2. เปิดใช้งาน Firestore Database
+3. ดาวน์โหลด Service Account Key (JSON)
+4. เก็บไฟล์ JSON ไว้ในโปรเจคต์
 
-**macOS:**
-```bash
-brew tap mongodb/brew
-brew install mongodb-community
-brew services start mongodb-community
-```
+### 3. Setup ImgBB API
 
-**Linux:**
-```bash
-# Follow official MongoDB installation guide for your distribution
-```
-
-### 3. Install MinIO Server
-
-**Windows:**
-1. Download from [MinIO Downloads](https://min.io/download)
-2. Extract and run:
-```powershell
-minio.exe server C:\minio-data
-```
-
-**macOS:**
-```bash
-brew install minio/stable/minio
-minio server ~/minio-data
-```
-
-**Linux:**
-```bash
-wget https://dl.min.io/server/minio/release/linux-amd64/minio
-chmod +x minio
-./minio server ~/minio-data
-```
-
-MinIO will run on:
-- API: `http://localhost:9000`
-- Console: `http://localhost:9001`
-
-Default credentials:
-- Access Key: `minioadmin`
-- Secret Key: `minioadmin`
+1. ลงทะเบียนที่ [imgbb.com](https://imgbb.com) (ฟรี)
+2. สร้าง API Key จาก [imgbb.com/api](https://api.imgbb.com/)
+3. คัดลอก API Key ไว้สำหรับขั้นตอนถัดไป
 
 ### 4. Setup Project
 
-1. Clone or extract the project
-2. Copy `env.example` to `.env.local`:
+1. Clone หรือ extract โปรเจคต์
+2. Copy `env.example` เป็น `.env.local`:
 ```bash
 # Windows PowerShell
 Copy-Item env.example .env.local
@@ -91,51 +80,47 @@ Copy-Item env.example .env.local
 cp env.example .env.local
 ```
 
-3. Edit `.env.local` and update if needed:
+3. แก้ไข `.env.local` และตั้งค่าตามนี้:
 ```env
-MONGODB_URI=mongodb://localhost:27017/issue-tracker
-MINIO_ENDPOINT=localhost
-MINIO_PORT=9000
-MINIO_USE_SSL=false
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=issue-uploads
-MINIO_PUBLIC_URL=http://localhost:9000
+# Firebase
+FIREBASE_SERVICE_ACCOUNT_KEY={"type":"service_account",...}  # ใส่ JSON ทั้งหมดในบรรทัดเดียว
+
+# ImgBB API
+IMGBB_API_KEY=your_imgbb_api_key_here
+
+# Next.js
+NEXT_PUBLIC_API_URL=http://localhost:4000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_SERVICE_MANAGEMENT_PORT=4000
 ```
 
-**Important**: If accessing from other devices on your network, set `MINIO_PUBLIC_URL` to your server's LAN IP:
-```env
-MINIO_PUBLIC_URL=http://192.168.1.100:9000
-```
+**หมายเหตุ**: `FIREBASE_SERVICE_ACCOUNT_KEY` ต้องเป็น JSON string ทั้งหมดในบรรทัดเดียว (ไม่ต้องมี line breaks)
 
-4. Install dependencies:
+4. ติดตั้ง dependencies:
 ```bash
 npm install
 ```
 
-5. Start development server:
+5. รันโปรเจคต์:
 ```bash
-npm run dev
+# รันทั้ง Issues Tracker และ Service Management Backend
+npm run dev:all
+
+# หรือรันแยกกัน:
+npm run dev              # Issues Tracker เท่านั้น (port 3000)
+npm run dev:backend      # Service Management Backend เท่านั้น (port 4000)
 ```
 
-The application will be available at `http://localhost:3000`
+## Access Points
+
+- **Issues Tracker**: `http://localhost:3000`
+- **Service Management**: `http://localhost:3000/service-management`
+- **Service Management API**: `http://localhost:4000`
 
 ## Required Ports
 
-- **3000**: Next.js development server
-- **27017**: MongoDB
-- **9000**: MinIO API
-- **9001**: MinIO Console (optional, for management)
-
-## Usage
-
-1. **Create Components**: Use the "Create Component" form to build your component tree
-2. **Create Issues**: Create issues and assign them to components
-3. **Drag & Drop**: Drag issue cards between columns to change status
-4. **Edit Issues**: Click on an issue card to open the detail page
-5. **Rich Text Editing**: Use the Tiptap editor to add formatted text and images
-6. **Image Upload**: Paste images from clipboard or drag & drop into editor
-7. **Image Annotation**: Click on any image in the editor to open annotation modal
+- **3000**: Next.js development server (Issues Tracker)
+- **4000**: Express API server (Service Management Backend)
 
 ## Project Structure
 
@@ -143,46 +128,87 @@ The application will be available at `http://localhost:3000`
 src/
 ├── app/
 │   ├── api/
-│   │   ├── upload/route.ts          # Image upload endpoint
-│   │   ├── issues/
-│   │   │   ├── route.ts             # List/create issues
-│   │   │   └── [id]/route.ts        # Get/update issue
-│   │   └── components/
-│   │       ├── route.ts             # List/create components
-│   │       └── [id]/route.ts        # Update component
-│   ├── issues/[id]/page.tsx         # Issue detail page
-│   └── page.tsx                     # Home page (Kanban board)
+│   │   ├── upload/route.ts          # Image upload endpoint (ImgBB)
+│   │   ├── issues/                   # Issues API
+│   │   ├── users/                    # Users API
+│   │   └── components/               # Components API
+│   ├── issues/[id]/page.tsx          # Issue detail page
+│   ├── service-management/           # Service Management pages
+│   │   ├── page.tsx                  # Dashboard
+│   │   ├── installations/            # Installation management
+│   │   ├── hospitals/                # Hospital management
+│   │   ├── remote/                   # Remote connection management
+│   │   └── ...
+│   └── page.tsx                      # Home page (Kanban board)
 ├── components/
-│   ├── IssueEditor.tsx              # Tiptap editor component
-│   └── ImageAnnotateModal.tsx       # Image annotation modal
-└── lib/
-    ├── db.ts                        # MongoDB connection
-    ├── models.ts                    # Mongoose models
-    ├── minio.ts                     # MinIO client
-    └── upload.ts                    # Upload helper
+│   ├── CanvasEditor.tsx              # Rich text editor with image annotation
+│   ├── IssueEditor.tsx               # Issue editor component
+│   ├── Header.tsx                    # Main header
+│   ├── Sidebar.tsx                   # Sidebar navigation
+│   └── service-management/            # Service Management components
+├── lib/
+│   ├── firestore.ts                  # Firestore helpers
+│   ├── firebase-admin.ts             # Firebase Admin setup
+│   ├── upload.ts                     # ImgBB upload helper
+│   └── service-management/           # Service Management utilities
+└── service-management-backend/
+    ├── server.ts                     # Express API server
+    ├── firestoreClient.ts            # Firestore client
+    ├── firestoreHelpers.ts           # Firestore helpers
+    └── types.ts                      # TypeScript types
 ```
+
+## Usage
+
+### Issues Tracker
+
+1. **สร้าง Components**: ใช้ฟอร์ม "Create Component" เพื่อสร้าง component tree
+2. **สร้าง Issues**: สร้างปัญหาและกำหนดให้กับ component
+3. **Drag & Drop**: ลาก issue cards ระหว่าง columns เพื่อเปลี่ยนสถานะ
+4. **แก้ไข Issues**: คลิกที่ issue card เพื่อเปิดหน้า detail
+5. **Rich Text Editing**: ใช้ Canvas editor เพื่อเพิ่มข้อความและรูปภาพ
+6. **Image Upload**: Paste รูปภาพจาก clipboard หรือ drag & drop เข้า editor
+7. **Image Annotation**: คลิกที่รูปภาพใน editor เพื่อเปิด annotation modal
+
+### Service Management
+
+1. **จัดการโรงพยาบาล**: เพิ่ม แก้ไข ดูรายการโรงพยาบาล
+2. **จัดการการติดตั้ง**: บันทึกข้อมูลการติดตั้งระบบ พร้อมรูปภาพ
+3. **จัดการการรีโมต**: บันทึกข้อมูล AnyDesk, VPN, และการเชื่อมต่อ
+4. **จัดการ SIM**: บันทึกข้อมูล SIM card และเครือข่าย
+5. **ส่งออก Excel**: ส่งออกข้อมูลเป็นไฟล์ Excel
 
 ## Notes
 
-- The bucket `issue-uploads` will be created automatically on first upload
-- Images are stored with UUID filenames to prevent conflicts
-- Annotated images create new versions (original is preserved)
-- Component paths are computed and cached at creation time
-- Issue component paths are snapshotted when component is assigned
+- รูปภาพทั้งหมดถูกเก็บไว้ที่ ImgBB (ฟรี 100%)
+- รูปภาพสามารถเข้าถึงได้จากทุกอุปกรณ์ (ไม่จำกัดเฉพาะเครื่องที่อัปโหลด)
+- Canvas editor รองรับการวาด ตัดต่อ และ annotate รูปภาพ
+- ข้อมูลทั้งหมดถูกเก็บใน Firebase Firestore
+- Service Management Backend รันแยกที่ port 4000
 
 ## Troubleshooting
 
-**MongoDB connection error:**
-- Ensure MongoDB is running: `mongosh` should connect
-- Check `MONGODB_URI` in `.env.local`
+**Firebase connection error:**
+- ตรวจสอบว่า `FIREBASE_SERVICE_ACCOUNT_KEY` ใน `.env.local` ถูกต้อง
+- ตรวจสอบว่า Service Account Key มีสิทธิ์เข้าถึง Firestore
 
-**MinIO connection error:**
-- Ensure MinIO is running and accessible
-- Check MinIO credentials in `.env.local`
-- Verify bucket is created (auto-created on first upload)
+**ImgBB upload error:**
+- ตรวจสอบว่า `IMGBB_API_KEY` ใน `.env.local` ถูกต้อง
+- ตรวจสอบว่า API Key ยังใช้งานได้ (ไม่หมดอายุ)
 
-**Image upload fails:**
-- Check MinIO is running
-- Verify `MINIO_PUBLIC_URL` is correct
-- Ensure bucket exists and has public read policy
+**Service Management API error:**
+- ตรวจสอบว่า Backend server รันอยู่ที่ port 4000
+- ตรวจสอบว่า `NEXT_PUBLIC_API_URL` ใน `.env.local` ถูกต้อง
 
+**Image not displaying:**
+- ตรวจสอบว่า URL ของรูปภาพเป็น ImgBB URL (https://i.ibb.co/...)
+- ตรวจสอบ network connection
+
+## Development Scripts
+
+- `npm run dev` - รัน Issues Tracker เท่านั้น
+- `npm run dev:backend` - รัน Service Management Backend เท่านั้น
+- `npm run dev:all` - รันทั้ง Issues Tracker และ Service Management Backend พร้อมกัน
+- `npm run build` - Build สำหรับ production
+- `npm run start` - รัน production server
+- `npm run lint` - ตรวจสอบ code quality

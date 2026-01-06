@@ -1,7 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-
 export interface UploadResult {
   url: string;
   key: string;
@@ -10,114 +6,71 @@ export interface UploadResult {
 }
 
 /**
- * Upload file buffer to Firebase Storage (or fallback to local storage)
- * Files will be stored permanently and won't be lost on deploy
+ * Upload file buffer to ImgBB API (free image hosting)
+ * Files will be stored permanently on ImgBB servers
  */
 export async function uploadBuffer(
   buffer: Buffer,
   mimeType: string,
   originalName?: string
 ): Promise<UploadResult> {
-  // Check if Firebase Service Account Key is available
-  const hasFirebaseCredentials = !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  // Check if ImgBB API Key is available
+  const imgbbApiKey = process.env.IMGBB_API_KEY;
 
-  if (hasFirebaseCredentials) {
-    // Use Firebase Storage
-    try {
-      const { getAdminStorage } = await import('./firebase-admin');
-      const storage = getAdminStorage();
-      const bucket = storage.bucket();
+  // Debug logging
+  console.log('[uploadBuffer] Checking IMGBB_API_KEY...');
+  console.log('[uploadBuffer] IMGBB_API_KEY exists:', !!imgbbApiKey);
+  console.log('[uploadBuffer] IMGBB_API_KEY length:', imgbbApiKey?.length || 0);
+  console.log('[uploadBuffer] All env vars with IMGBB:', Object.keys(process.env).filter(k => k.includes('IMGBB')));
 
-      // Generate unique filename
-      const ext = originalName?.split('.').pop()?.toLowerCase() || 
-                  (mimeType.includes('png') ? 'png' : 
-                   mimeType.includes('gif') ? 'gif' : 
-                   mimeType.includes('webp') ? 'webp' : 'jpg');
-      const filename = `uploads/${uuidv4()}.${ext}`;
-
-      // Create file reference
-      const file = bucket.file(filename);
-
-      // Upload buffer to Firebase Storage
-      await file.save(buffer, {
-        metadata: {
-          contentType: mimeType,
-          metadata: {
-            originalName: originalName || 'uploaded-file',
-            uploadedAt: new Date().toISOString(),
-          },
-        },
-        public: true, // Make file publicly accessible
-      });
-
-      // Get public URL
-      let publicUrl: string;
-      try {
-        // Try to get public URL (if bucket has public access)
-        publicUrl = `https://storage.googleapis.com/${bucket.name}/${filename}`;
-        
-        // Verify URL is accessible by making it public
-        await file.makePublic();
-      } catch (error: any) {
-        // If public URL doesn't work, generate signed URL (valid for 1 year)
-        const [signedUrl] = await file.getSignedUrl({
-          action: 'read',
-          expires: '03-09-2025', // 1 year from now (adjust as needed)
-        });
-        publicUrl = signedUrl;
-      }
-
-      return {
-        url: publicUrl,
-        key: filename,
-        mime: mimeType,
-        size: buffer.length,
-      };
-    } catch (error: any) {
-      console.error('Firebase Storage upload error, falling back to local storage:', error.message);
-      // Fall through to local storage fallback
-    }
+  if (!imgbbApiKey) {
+    console.error('[uploadBuffer] IMGBB_API_KEY is not set in process.env');
+    throw new Error('IMGBB_API_KEY is not set. Please set IMGBB_API_KEY in .env.local and restart the server.');
   }
 
-  // Fallback to local file storage (for local development)
   try {
-    // Create uploads directory if it doesn't exist
-    const uploadsDir = join(process.cwd(), 'public', 'uploads');
-    try {
-      await mkdir(uploadsDir, { recursive: true });
-    } catch (error: any) {
-      if (error.code !== 'EEXIST') {
-        throw new Error(`Failed to create uploads directory: ${error.message}`);
-      }
+    // Convert buffer to base64 for ImgBB API
+    const base64Image = buffer.toString('base64');
+
+    // Create URL-encoded form data for ImgBB API
+    const formData = new URLSearchParams();
+    formData.append('key', imgbbApiKey);
+    formData.append('image', base64Image);
+
+    // Upload to ImgBB API
+    const response = await fetch('https://api.imgbb.com/1/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData?.error?.message || `ImgBB API error: ${response.status} ${response.statusText}`;
+      throw new Error(errorMessage);
     }
 
-    // Generate unique filename
-    const ext = originalName?.split('.').pop()?.toLowerCase() || 
-                (mimeType.includes('png') ? 'png' : 
-                 mimeType.includes('gif') ? 'gif' : 
-                 mimeType.includes('webp') ? 'webp' : 'jpg');
-    const filename = `${uuidv4()}.${ext}`;
-    const filepath = join(uploadsDir, filename);
+    const result = await response.json();
 
-    // Write file to disk
-    await writeFile(filepath, buffer);
-
-    // Return public URL (Next.js serves files from public folder)
-    const publicUrl = `/uploads/${filename}`;
-
-    if (!hasFirebaseCredentials) {
-      console.warn('⚠️ Firebase credentials not found. Using local file storage. Files will be lost on deploy. See FIREBASE_STORAGE_SETUP.md for setup instructions.');
+    if (!result.success || !result.data || !result.data.url) {
+      throw new Error('ImgBB API did not return image URL');
     }
+
+    // ImgBB returns the URL directly
+    const publicUrl = result.data.url;
+    const imageKey = result.data.id || result.data.url.split('/').pop() || 'unknown';
 
     return {
-      url: publicUrl,
-      key: filename,
+      url: publicUrl, // Full URL from ImgBB (e.g., https://i.ibb.co/xxxxx/image.jpg)
+      key: imageKey,
       mime: mimeType,
       size: buffer.length,
     };
   } catch (error: any) {
-    console.error('Local storage upload error:', error);
-    throw new Error(`Failed to upload file: ${error.message}`);
+    console.error('ImgBB upload error:', error);
+    throw new Error(`Failed to upload file to ImgBB: ${error.message}`);
   }
 }
 

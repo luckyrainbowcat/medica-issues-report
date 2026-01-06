@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { fabric } from 'fabric';
+import { API_URL } from '@/lib/service-management/api';
 
 interface CanvasEditorProps {
   initialContent?: any;
@@ -54,6 +55,9 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
   }, [historyIndex]);
   const [isPanning, setIsPanning] = useState(false);
   const [lastPanPoint, setLastPanPoint] = useState({ x: 0, y: 0 });
+  const [isMobilePanning, setIsMobilePanning] = useState(false);
+  const [mobilePanStartPoint, setMobilePanStartPoint] = useState<{ x: number; y: number } | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
   const [cropRect, setCropRect] = useState<fabric.Rect | null>(null);
@@ -64,23 +68,211 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
   const isDeletingRef = useRef(false);
 
   const handleImageUpload = useCallback(async (file: File) => {
-    if (!fabricCanvasRef.current) return;
+    if (!fabricCanvasRef.current) {
+      alert('Canvas ยังไม่พร้อม กรุณารอสักครู่');
+      return;
+    }
 
     try {
+      // Validate file size on mobile (max 5MB)
+      const isMobile = window.innerWidth < 640;
+      const maxSize = isMobile ? 5 * 1024 * 1024 : 10 * 1024 * 1024; // 5MB mobile, 10MB desktop
+      if (file.size > maxSize) {
+        alert(`ไฟล์ใหญ่เกินไป กรุณาเลือกไฟล์ที่เล็กกว่า ${isMobile ? '5' : '10'}MB`);
+        return;
+      }
+
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        alert('กรุณาเลือกไฟล์รูปภาพเท่านั้น');
+        return;
+      }
+
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      // Retry mechanism for mobile network issues
+      const maxRetries = 2;
+      let lastError: Error | null = null;
+      
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          // Create AbortController for timeout
+          const controller = new AbortController();
+          // Longer timeout for mobile (90 seconds)
+          const timeoutId = setTimeout(() => controller.abort(), 90000);
+
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+            // Don't set Content-Type header - browser will set it with boundary for FormData
+          });
+          
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            let errorMessage = 'Upload failed';
+            try {
+              const errorData = await response.json();
+              errorMessage = errorData.error || errorMessage;
+            } catch {
+              errorMessage = response.statusText || errorMessage;
+            }
+            throw new Error(errorMessage);
+          }
+
+          const result = await response.json();
+          if (!result.url) {
+            throw new Error('Server did not return image URL');
+          }
+
+          // ตรวจสอบว่าเป็น ImgBB URL หรือไม่ (ไม่ควรแปลงเป็น relative path)
+          let imageUrl = result.url;
+          let relativePath = imageUrl; // เก็บ URL สำหรับการบันทึก
+          
+          // ถ้าเป็น ImgBB URL หรือ external URL ให้เก็บเป็น absolute URL ตามเดิม
+          const isImgBBUrl = imageUrl.includes('i.ibb.co') || imageUrl.includes('ibb.co');
+          const isExternalUrl = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+          
+          if (isExternalUrl && !isImgBBUrl) {
+            // ถ้าเป็น external URL ที่ไม่ใช่ ImgBB (เช่น Firebase Storage) ให้แปลงเป็น relative path
+            try {
+              const urlObj = new URL(imageUrl);
+              relativePath = urlObj.pathname;
+              console.log('[Canvas] Converted external URL to relative path:', relativePath);
+            } catch (e) {
+              console.warn('[Canvas] Failed to parse URL, using as-is:', imageUrl);
+            }
+          } else if (isImgBBUrl) {
+            // ImgBB URL ให้เก็บเป็น absolute URL ตามเดิม (ไม่แปลง)
+            console.log('[Canvas] ImgBB URL detected, keeping as absolute URL:', imageUrl);
+            relativePath = imageUrl; // เก็บ absolute URL
+          }
+          
+          // สร้าง full URL สำหรับการโหลด
+          if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://') && !imageUrl.startsWith('data:')) {
+            // ถ้าเป็น relative path (ไม่ใช่ absolute URL) ให้ใช้ API_URL
+            if (!relativePath.startsWith('/')) {
+              relativePath = '/' + relativePath;
+            }
+            imageUrl = `${API_URL}${relativePath}`;
+            console.log('[Canvas] Using API_URL for image loading:', imageUrl);
+            console.log('[Canvas] Will save as relative path:', relativePath);
+          } else {
+            // ถ้าเป็น absolute URL อยู่แล้ว (ImgBB หรือ external URL) ให้ใช้ตามเดิม
+            imageUrl = imageUrl;
+            console.log('[Canvas] Using absolute URL for image loading:', imageUrl);
+            console.log('[Canvas] Will save as absolute URL:', relativePath);
+          }
+
+          // Success - break out of retry loop
+          return new Promise<void>((resolve, reject) => {
+            if (!fabricCanvasRef.current || !fabricCanvasRef.current.getContext()) {
+              reject(new Error('Canvas not available'));
+              return;
+            }
+
+            const canvas = fabricCanvasRef.current;
+            
+            // Use simpler method for mobile compatibility
+            fabric.Image.fromURL(
+              imageUrl,
+              (img: fabric.Image) => {
+                try {
+                  if (!canvas || !canvas.getContext()) {
+                    reject(new Error('Canvas not available'));
+                    return;
+                  }
+                  
+                  // Scale image to reasonable size
+                  const isMobile = window.innerWidth < 640;
+                  const maxWidth = isMobile ? 300 : 400;
+                  if (img.width && img.width > maxWidth) {
+                    img.scaleToWidth(maxWidth);
+                  } else if (img.width) {
+                    img.scaleToWidth(Math.min(img.width, isMobile ? 250 : 300));
+                  }
+                  
+                  // Get pointer position if available, otherwise use center of viewport
+                  const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+                  const centerX = (-vpt[4] + (window.innerWidth || 800) / 2) / vpt[0];
+                  const centerY = (-vpt[5] + (window.innerHeight || 600) / 2) / vpt[3];
+                  
+                  img.set({
+                    left: centerX - (img.width || 300) * (img.scaleX || 1) / 2,
+                    top: centerY - (img.height || 300) * (img.scaleY || 1) / 2,
+                    selectable: true,
+                    evented: true,
+                  });
+                  
+                  canvas.add(img);
+                  canvas.setActiveObject(img);
+                  
+                  // บันทึก relative path ใน image object เพื่อให้บันทึกเป็น relative path
+                  if (img.getElement()) {
+                    // เก็บ relative path ใน object เพื่อใช้ตอนบันทึก
+                    (img as any)._relativePath = relativePath;
+                    console.log('[Canvas] Stored relative path for image:', relativePath);
+                  }
+                  
+                  canvas.renderAll();
+                  resolve();
+                } catch (err: any) {
+                  console.error('Error adding image to canvas:', err);
+                  reject(new Error(`ไม่สามารถเพิ่มรูปภาพลงใน canvas: ${err.message || 'Unknown error'}`));
+                }
+              },
+              {
+                crossOrigin: 'anonymous'
+              }
+            );
+          });
+        } catch (fetchError: any) {
+          lastError = fetchError;
+          
+          // Don't retry on certain errors
+          if (fetchError.message?.includes('File size') || 
+              fetchError.message?.includes('Only image') ||
+              fetchError.message?.includes('No file')) {
+            throw fetchError; // Don't retry validation errors
+          }
+          
+          // If last attempt, throw error
+          if (attempt === maxRetries) {
+            if (fetchError.name === 'AbortError') {
+              throw new Error('การอัปโหลดใช้เวลานานเกินไป กรุณาลองอีกครั้งหรือเลือกรูปภาพที่เล็กกว่า');
+            } else if (fetchError.message?.includes('fetch') || fetchError.message?.includes('network')) {
+              throw new Error('ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต');
+            } else {
+              throw new Error(`เกิดข้อผิดพลาดในการอัปโหลด: ${fetchError.message || 'Unknown error'}`);
+            }
+          }
+          
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+      }
+      
+      // Should never reach here, but just in case
+      throw lastError || new Error('Upload failed after retries');
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-        throw new Error(errorData.error || 'Upload failed');
+        let errorMessage = 'Upload failed';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // If JSON parse fails, use status text
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const result = await response.json();
+      if (!result.url) {
+        throw new Error('Server did not return image URL');
+      }
 
       return new Promise<void>((resolve, reject) => {
         if (!fabricCanvasRef.current || !fabricCanvasRef.current.getContext()) {
@@ -89,79 +281,95 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         }
 
         const canvas = fabricCanvasRef.current;
-        // Use a more reliable method to load images
-        const imgElement = document.createElement('img');
-        imgElement.crossOrigin = 'anonymous';
         
-        imgElement.onload = () => {
-          if (!canvas || !canvas.getContext()) {
-            reject(new Error('Canvas not available'));
-            return;
-          }
-          
-          try {
-            fabric.Image.fromObject({
-              src: result.url,
-              crossOrigin: 'anonymous'
-            }, (img: fabric.Image) => {
-              if (canvas && canvas.getContext()) {
-                // Scale image to reasonable size
-                const maxWidth = 400;
-                if (img.width && img.width > maxWidth) {
-                  img.scaleToWidth(maxWidth);
-                } else {
-                  img.scaleToWidth(300);
-                }
-                
-                // Get pointer position if available, otherwise use center of viewport
-                const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
-                const centerX = (-vpt[4] + (window.innerWidth || 800) / 2) / vpt[0];
-                const centerY = (-vpt[5] + (window.innerHeight || 600) / 2) / vpt[3];
-                
-                img.set({
-                  left: centerX - (img.width || 300) * (img.scaleX || 1) / 2,
-                  top: centerY - (img.height || 300) * (img.scaleY || 1) / 2,
-                  selectable: true,
-                  evented: true,
-                });
-                
-                // Ensure image src is preserved
-                img.setSrc(result.url, () => {
-                  canvas.add(img);
-                  canvas.setActiveObject(img);
-                  canvas.renderAll();
-                  resolve();
-                });
-              } else {
+        // Use simpler method for mobile compatibility
+        fabric.Image.fromURL(
+          result.url,
+          (img: fabric.Image) => {
+            try {
+              if (!canvas || !canvas.getContext()) {
                 reject(new Error('Canvas not available'));
+                return;
               }
-            });
-          } catch (err) {
-            console.error('Error creating fabric image:', err);
-            reject(err);
+              
+              // Scale image to reasonable size
+              const isMobile = window.innerWidth < 640;
+              const maxWidth = isMobile ? 300 : 400;
+              if (img.width && img.width > maxWidth) {
+                img.scaleToWidth(maxWidth);
+              } else if (img.width) {
+                img.scaleToWidth(Math.min(img.width, isMobile ? 250 : 300));
+              }
+              
+              // Get pointer position if available, otherwise use center of viewport
+              const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+              const centerX = (-vpt[4] + (window.innerWidth || 800) / 2) / vpt[0];
+              const centerY = (-vpt[5] + (window.innerHeight || 600) / 2) / vpt[3];
+              
+              img.set({
+                left: centerX - (img.width || 300) * (img.scaleX || 1) / 2,
+                top: centerY - (img.height || 300) * (img.scaleY || 1) / 2,
+                selectable: true,
+                evented: true,
+              });
+              
+              canvas.add(img);
+              canvas.setActiveObject(img);
+              canvas.renderAll();
+              resolve();
+            } catch (err: any) {
+              console.error('Error adding image to canvas:', err);
+              reject(new Error(`ไม่สามารถเพิ่มรูปภาพลงใน canvas: ${err.message || 'Unknown error'}`));
+            }
+          },
+          {
+            crossOrigin: 'anonymous'
           }
-        };
-        
-        imgElement.onerror = () => {
-          reject(new Error('Failed to load image'));
-        };
-        
-        imgElement.src = result.url;
+        );
       });
     } catch (error: any) {
       console.error('Error uploading image:', error);
-      alert(`ไม่สามารถอัปโหลดรูปภาพได้: ${error.message || 'Unknown error'}`);
-      throw error;
+      const errorMessage = error.message || 'Unknown error';
+      alert(`ไม่สามารถอัปโหลดรูปภาพได้: ${errorMessage}`);
+      // Don't throw error, just show alert
+      return Promise.reject(error);
     }
   }, []);
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
+    // Dispose existing canvas if exists (ป้องกัน canvas ซ้อนกัน)
+    if (fabricCanvasRef.current) {
+      try {
+        fabricCanvasRef.current.dispose();
+        console.log('[Canvas] Disposed existing canvas before creating new one');
+      } catch (disposeError) {
+        console.warn('[Canvas] Error disposing existing canvas:', disposeError);
+      }
+      fabricCanvasRef.current = null;
+    }
+
     // Initialize Fabric.js canvas - Infinite canvas (large size for panning)
     // Canvas size is large, but viewport shows only screen size
-    const canvasWidth = Math.max(window.innerWidth * 3, 5000);
-    const canvasHeight = Math.max((window.innerHeight - 120) * 3, 5000);
+    // Calculate available height - account for toolbar and mobile header
+    const isMobile = window.innerWidth < 640; // sm breakpoint
+    const toolbarHeight = isMobile ? 180 : 120; // More space for mobile toolbar
+    const availableHeight = Math.max(window.innerHeight - toolbarHeight, 400);
+    
+    // Reduce canvas size on mobile to save memory
+    // Mobile: 2x viewport, max 1500px (ลดลงจาก 2000px)
+    // Desktop: 3x viewport, max 3000px (ลดลงจาก 5000px เพื่อลด memory usage)
+    const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+    const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+    const canvasWidth = Math.min(
+      isMobile ? window.innerWidth * 2 : window.innerWidth * 3,
+      MAX_CANVAS_WIDTH
+    );
+    const canvasHeight = Math.min(
+      isMobile ? availableHeight * 2 : availableHeight * 3,
+      MAX_CANVAS_HEIGHT
+    );
     
     const canvas = new fabric.Canvas(canvasRef.current, {
       width: canvasWidth,
@@ -169,11 +377,19 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
       backgroundColor: '#ffffff',
       isDrawingMode: false,
       preserveObjectStacking: true,
+      renderOnAddRemove: !isMobile, // Disable auto-render on mobile to save memory
+      stateful: false, // Disable stateful mode to save memory
     });
+    
+    // Optimize rendering for mobile - reduce memory usage
+    if (isMobile) {
+      // Disable auto-render to save memory
+      canvas.renderOnAddRemove = false;
+    }
     
     // Set initial viewport to center of canvas
     const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight - 120;
+    const viewportHeight = availableHeight;
     const initialX = (canvasWidth - viewportWidth) / 2;
     const initialY = (canvasHeight - viewportHeight) / 2;
     canvas.setViewportTransform([1, 0, 0, 1, -initialX, -initialY]);
@@ -184,46 +400,105 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
     // Skip loading if there's old Tiptap content (different format)
     if (initialContent) {
       // Use requestAnimationFrame to ensure canvas is fully ready
+      let retryCount = 0;
+      const maxRetries = 20; // Max 20 retries (1 second total)
       const loadCanvasContent = () => {
         requestAnimationFrame(() => {
           if (canvas && canvasRef.current && canvas.getContext()) {
             // Check if it's an image (saved as image due to size limit)
             if (initialContent.isImage && initialContent.imageUrl) {
+              // โหลดรูปภาพในพื้นหลัง (ไม่บล็อกการ render)
+              setTimeout(() => {
+                try {
+                  const imgElement = document.createElement('img');
+                  imgElement.crossOrigin = 'anonymous';
+                  
+                  // เพิ่ม timeout สำหรับการโหลดรูปภาพ (5 วินาที)
+                  const imageLoadTimeout = setTimeout(() => {
+                    console.error('Image load timeout:', initialContent.imageUrl);
+                    imgElement.onload = null;
+                    imgElement.onerror = null;
+                    // Render canvas ว่างแทนการค้าง
+                    try {
+                      canvas.renderAll();
+                    } catch (renderError) {
+                      console.error('Error rendering canvas:', renderError);
+                    }
+                  }, 5000);
+                  
+                  // แปลง relative path เป็น absolute URL ถ้าจำเป็น
+                  let imageUrl = initialContent.imageUrl;
+                  if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://') && !imageUrl.startsWith('data:')) {
+                    // ถ้าไม่ขึ้นต้นด้วย / ให้เพิ่ม /
+                    if (!imageUrl.startsWith('/')) {
+                      imageUrl = '/' + imageUrl;
+                    }
+                    imageUrl = `${API_URL}${imageUrl}`;
+                    console.log('Converted relative imageUrl to absolute URL:', imageUrl);
+                  }
+                  
+                  imgElement.onload = () => {
+                    clearTimeout(imageLoadTimeout);
+                    fabric.Image.fromURL(
+                      imageUrl,
+                      (img: fabric.Image) => {
+                        if (canvas && canvas.getContext()) {
+                          // Center the image - reduce size on mobile to save memory
+                          const isMobile = window.innerWidth < 640;
+                          const maxImageWidth = isMobile ? 400 : 800;
+                          img.scaleToWidth(Math.min(canvas.width || maxImageWidth, maxImageWidth));
+                          img.set({
+                            left: (canvas.width || 800) / 2 - (img.width || 0) * (img.scaleX || 1) / 2,
+                            top: (canvas.height || 600) / 2 - (img.height || 0) * (img.scaleY || 1) / 2,
+                            selectable: true,
+                            evented: true,
+                          });
+                          // Ensure src is set with timeout
+                          const setSrcTimeout = setTimeout(() => {
+                            console.warn('Image setSrc timeout, rendering anyway');
+                            canvas.add(img);
+                            canvas.renderAll();
+                          }, 3000);
+                          
+                          img.setSrc(imageUrl, () => {
+                            clearTimeout(setSrcTimeout);
+                            canvas.add(img);
+                            canvas.renderAll();
+                          }, { crossOrigin: 'anonymous' });
+                        }
+                      },
+                      { crossOrigin: 'anonymous' }
+                    );
+                  };
+                  
+                  imgElement.onerror = () => {
+                    clearTimeout(imageLoadTimeout);
+                    console.error('Error loading image from URL:', imageUrl);
+                    // Continue with empty canvas instead of hanging
+                    try {
+                      canvas.renderAll();
+                    } catch (renderError) {
+                      console.error('Error rendering canvas:', renderError);
+                    }
+                  };
+                  
+                  imgElement.src = imageUrl;
+                } catch (error) {
+                  console.error('Error loading image:', error);
+                  // Continue with empty canvas instead of hanging
+                  try {
+                    canvas.renderAll();
+                  } catch (renderError) {
+                    console.error('Error rendering canvas:', renderError);
+                  }
+                }
+              }, 100); // Delay 100ms เพื่อให้ canvas render ก่อน
+              
+              // Render canvas ว่างทันที (ไม่ต้องรอรูปภาพ)
               try {
-                const imgElement = document.createElement('img');
-                imgElement.crossOrigin = 'anonymous';
-                
-                imgElement.onload = () => {
-                  fabric.Image.fromURL(
-                    initialContent.imageUrl,
-                    (img: fabric.Image) => {
-                      if (canvas && canvas.getContext()) {
-                        // Center the image
-                        img.scaleToWidth(Math.min(canvas.width || 800, 800));
-                        img.set({
-                          left: (canvas.width || 800) / 2 - (img.width || 0) * (img.scaleX || 1) / 2,
-                          top: (canvas.height || 600) / 2 - (img.height || 0) * (img.scaleY || 1) / 2,
-                          selectable: true,
-                          evented: true,
-                        });
-                        // Ensure src is set
-                        img.setSrc(initialContent.imageUrl, () => {
-                          canvas.add(img);
-                          canvas.renderAll();
-                        }, { crossOrigin: 'anonymous' });
-                      }
-                    },
-                    { crossOrigin: 'anonymous' }
-                  );
-                };
-                
-                imgElement.onerror = () => {
-                  console.error('Error loading image from URL:', initialContent.imageUrl);
-                };
-                
-                imgElement.src = initialContent.imageUrl;
-              } catch (error) {
-                console.error('Error loading image:', error);
+                canvas.renderAll();
+              } catch (renderError) {
+                console.error('Error rendering canvas:', renderError);
               }
             }
             // If it's canvas JSON data
@@ -231,12 +506,47 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
               try {
                 const canvasData = initialContent.canvas;
                 
-                // Restore canvas dimensions if saved
+                // Restore canvas dimensions if saved - แต่จำกัดขนาดสูงสุดเพื่อป้องกัน memory issues
                 if (canvasData.canvasWidth && canvasData.canvasHeight) {
-                  canvas.setDimensions({
-                    width: canvasData.canvasWidth,
-                    height: canvasData.canvasHeight,
-                  });
+                  const isMobile = window.innerWidth < 640;
+                  const toolbarHeight = isMobile ? 180 : 120;
+                  const availableHeight = Math.max(window.innerHeight - toolbarHeight, 400);
+                  const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+                  const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+                  
+                  // คำนวณขนาด canvas ที่ควรเป็นสำหรับ device ปัจจุบัน
+                  const idealCanvasWidth = Math.min(
+                    isMobile ? window.innerWidth * 2 : window.innerWidth * 3,
+                    MAX_CANVAS_WIDTH
+                  );
+                  const idealCanvasHeight = Math.min(
+                    isMobile ? availableHeight * 2 : availableHeight * 3,
+                    MAX_CANVAS_HEIGHT
+                  );
+                  
+                  // ถ้า canvas ที่บันทึกไว้เล็กกว่า ideal size มาก (เช่น จาก mobile มา desktop)
+                  // ให้ใช้ ideal size แทน เพื่อให้พื้นที่วาดขยายกลับมา
+                  const savedWidth = canvasData.canvasWidth;
+                  const savedHeight = canvasData.canvasHeight;
+                  const isSavedSizeTooSmall = savedWidth < idealCanvasWidth * 0.7 || savedHeight < idealCanvasHeight * 0.7;
+                  
+                  if (isSavedSizeTooSmall && !isMobile) {
+                    // ใช้ ideal size สำหรับ desktop
+                    canvas.setDimensions({
+                      width: idealCanvasWidth,
+                      height: idealCanvasHeight,
+                    });
+                    console.log(`Canvas size expanded to desktop size: ${idealCanvasWidth}x${idealCanvasHeight} (saved: ${savedWidth}x${savedHeight})`);
+                  } else {
+                    // จำกัดขนาดไม่ให้เกิน limit
+                    const safeWidth = Math.min(savedWidth, MAX_CANVAS_WIDTH);
+                    const safeHeight = Math.min(savedHeight, MAX_CANVAS_HEIGHT);
+                    canvas.setDimensions({
+                      width: safeWidth,
+                      height: safeHeight,
+                    });
+                    console.log(`Canvas size restored: ${safeWidth}x${safeHeight} (original: ${savedWidth}x${savedHeight})`);
+                  }
                 }
                 
                 // Restore viewport transform if saved
@@ -250,55 +560,127 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
                 delete jsonData.canvasHeight;
                 delete jsonData.viewportTransform;
                 
-              canvas.loadFromJSON(
-                  jsonData,
-                () => {
-                  // Success callback - render after loading
-                  try {
-                    // Reload all images to ensure they display correctly
-                    const objects = canvas.getObjects();
-                    objects.forEach((obj: any) => {
-                      if (obj.type === 'image') {
-                        try {
-                          // Get the image src if available
-                          const imgSrc = (obj as any).src || (obj as any)._element?.src;
-                          if (imgSrc) {
-                            // Reload the image to ensure it displays
-                            const img = obj as fabric.Image;
-                            img.setSrc(imgSrc, () => {
-                              canvas.renderAll();
-                            }, { crossOrigin: 'anonymous' });
-                          }
-                        } catch (e) {
-                          console.warn('Error reloading image:', e);
-                        }
-                      }
-                      // Set strokeUniform for all objects with stroke to keep stroke width constant when zooming
-                      if (obj.stroke && obj.strokeWidth) {
-                        obj.set('strokeUniform', true);
-                      }
-                    });
-                    
-                    // Wait a bit for images to load, then render
-                    setTimeout(() => {
-                      canvas.renderAll();
-                    }, 500);
-                    
-                    // Save initial state to history after loading
-                    setTimeout(() => {
-                      const initialJson = JSON.stringify(canvas.toJSON());
-                      setHistory([initialJson]);
-                      historyIndexRef.current = 0;
-                      setHistoryIndex(0);
-                      console.log('Initial state saved to history');
-                    }, 100);
-                  } catch (renderError) {
-                    console.error('Error rendering after load:', renderError);
-                    // Still try to render
-                    canvas.renderAll();
-                  }
+              // เพิ่ม timeout สำหรับ loadFromJSON (10 วินาที)
+              const loadTimeout = setTimeout(() => {
+                console.error('loadFromJSON timeout - rendering empty canvas');
+                try {
+                  canvas.renderAll();
+                } catch (renderError) {
+                  console.error('Error rendering canvas:', renderError);
                 }
-              );
+              }, 10000);
+              
+              try {
+                canvas.loadFromJSON(
+                    jsonData,
+                  () => {
+                    clearTimeout(loadTimeout);
+                    // Success callback - render after loading
+                    try {
+                      // Render canvas ทันทีโดยไม่ต้องรอรูปภาพ (รูปภาพจะโหลดในพื้นหลัง)
+                      try {
+                        canvas.renderAll();
+                      } catch (renderError) {
+                        console.error('Error rendering canvas:', renderError);
+                      }
+                      
+                      // Reload images in background (ไม่บล็อกการ render)
+                      setTimeout(() => {
+                        const objects = canvas.getObjects();
+                        objects.forEach((obj: any) => {
+                          if (obj.type === 'image') {
+                            try {
+                              // Get the image src if available
+                              let imgSrc = (obj as any).src || (obj as any)._element?.src;
+                              if (imgSrc) {
+                                console.log('[Canvas] Original image src:', imgSrc.substring(0, 100));
+                                // ถ้าเป็น relative path (ไม่ใช่ absolute URL) ให้เพิ่ม API_URL
+                                if (!imgSrc.startsWith('http://') && !imgSrc.startsWith('https://') && !imgSrc.startsWith('data:')) {
+                                  // ถ้าไม่ขึ้นต้นด้วย / ให้เพิ่ม /
+                                  if (!imgSrc.startsWith('/')) {
+                                    imgSrc = '/' + imgSrc;
+                                  }
+                                  imgSrc = `${API_URL}${imgSrc}`;
+                                  console.log('[Canvas] Converted relative image path to absolute URL:', imgSrc);
+                                  console.log('[Canvas] API_URL:', API_URL);
+                                } else {
+                                  console.log('[Canvas] Image src is already absolute URL');
+                                }
+                                
+                                // Reload the image in background (ไม่บล็อก)
+                                const img = obj as fabric.Image;
+                                // ใช้ setTimeout เพื่อไม่ให้บล็อกการ render
+                                setTimeout(() => {
+                                  try {
+                                    const imageLoadTimeout = setTimeout(() => {
+                                      console.warn('Image reload timeout:', imgSrc);
+                                    }, 5000);
+                                    
+                                    img.setSrc(imgSrc, () => {
+                                      clearTimeout(imageLoadTimeout);
+                                      console.log('[Canvas] Image loaded successfully:', imgSrc.substring(0, 100));
+                                      canvas.renderAll();
+                                    }, { crossOrigin: 'anonymous' });
+                                    
+                                    // เพิ่ม error handler สำหรับ setSrc
+                                    setTimeout(() => {
+                                      const imgElement = img.getElement();
+                                      if (imgElement) {
+                                        imgElement.onerror = () => {
+                                          console.error('[Canvas] Image failed to load:', imgSrc.substring(0, 100));
+                                          clearTimeout(imageLoadTimeout);
+                                        };
+                                      }
+                                    }, 100);
+                                  } catch (e) {
+                                    console.warn('Error reloading image:', e);
+                                  }
+                                }, 100);
+                              }
+                            } catch (e) {
+                              console.warn('Error processing image:', e);
+                            }
+                          }
+                          // Set strokeUniform for all objects with stroke to keep stroke width constant when zooming
+                          if (obj.stroke && obj.strokeWidth) {
+                            obj.set('strokeUniform', true);
+                          }
+                        });
+                      }, 100);
+                      
+                      // Save initial state to history after loading
+                      setTimeout(() => {
+                        try {
+                          const initialJson = JSON.stringify(canvas.toJSON());
+                          setHistory([initialJson]);
+                          historyIndexRef.current = 0;
+                          setHistoryIndex(0);
+                          console.log('Initial state saved to history');
+                        } catch (e) {
+                          console.warn('Error saving initial state:', e);
+                        }
+                      }, 100);
+                    } catch (renderError) {
+                      console.error('Error rendering after load:', renderError);
+                      // Still try to render
+                      try {
+                        canvas.renderAll();
+                      } catch (e) {
+                        console.error('Error rendering canvas:', e);
+                      }
+                    }
+                  }
+                );
+              } catch (loadError) {
+                clearTimeout(loadTimeout);
+                console.error('Error calling loadFromJSON:', loadError);
+                // Continue with empty canvas instead of hanging
+                try {
+                  canvas.renderAll();
+                } catch (renderError) {
+                  console.error('Error rendering canvas:', renderError);
+                }
+              }
             } catch (loadError) {
               console.error('Error in loadFromJSON:', loadError);
               // If loadFromJSON throws, try to continue with empty canvas
@@ -310,8 +692,19 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
               }
             }
           } else {
-            // Canvas not ready yet, retry
-            setTimeout(loadCanvasContent, 50);
+            // Canvas not ready yet, retry with max retry count
+            retryCount++;
+            if (retryCount < maxRetries) {
+              setTimeout(loadCanvasContent, 50);
+            } else {
+              console.error('Canvas failed to initialize after max retries');
+              // Continue with empty canvas
+              try {
+                canvas.renderAll();
+              } catch (renderError) {
+                console.error('Error rendering canvas:', renderError);
+              }
+            }
           }
         });
       };
@@ -331,7 +724,7 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
       }, 200);
     }
 
-    // Handle drawing - use current brush color/width from canvas
+    // Track drawing state for free drawing tool
     canvas.on('path:created', (e: any) => {
       try {
         // If we're in delete mode, don't create any paths
@@ -365,6 +758,11 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
     canvas.on('mouse:down', (opt: any) => {
       const evt = opt.e;
       const currentTool = (window as any).__currentTool || 'select';
+      
+      // Track drawing state for free drawing tool
+      if (currentTool === 'draw') {
+        setIsDrawing(true);
+      }
       
       // Handle text tool
       if (currentTool === 'text') {
@@ -402,6 +800,9 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         if (opt.target && opt.target !== canvas) {
           return;
         }
+        
+        // Track drawing state for shape tools
+        setIsDrawingShape(true);
         
         evt.preventDefault();
         evt.stopPropagation();
@@ -577,8 +978,17 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
     });
 
     canvas.on('mouse:up', () => {
+      const currentTool = (window as any).__currentTool || 'select';
+      
+      // Track drawing state for free drawing tool
+      if (currentTool === 'draw') {
+        // Delay a bit to ensure path:created has finished
+        setTimeout(() => {
+          setIsDrawing(false);
+        }, 100);
+      }
+      
       if (isDrawingShapeFabric && currentShapeFabric) {
-        const currentTool = (window as any).__currentTool || 'select';
         
         // For arrow tool, group line and arrowhead together
         if (currentTool === 'arrow' && currentShapeFabric instanceof fabric.Line && currentArrowhead) {
@@ -620,6 +1030,7 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         shapeStartPointFabric = null;
         currentShapeFabric = null;
         currentArrowhead = null;
+        setIsDrawingShape(false);
       }
     });
 
@@ -640,16 +1051,41 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         try {
           // Keep canvas large, viewport will be handled by CSS
           // Canvas size stays large for infinite canvas effect
-          const canvasWidth = Math.max(window.innerWidth * 3, 5000);
-          const canvasHeight = Math.max((window.innerHeight - 120) * 3, 5000);
+          const isMobile = window.innerWidth < 640; // sm breakpoint
+          const toolbarHeight = isMobile ? 180 : 120;
+          const availableHeight = Math.max(window.innerHeight - toolbarHeight, 400);
+          // Reduce canvas size on mobile to save memory - จำกัดขนาดสูงสุด
+          const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+          const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+          const canvasWidth = Math.min(
+            isMobile ? window.innerWidth * 2 : window.innerWidth * 3,
+            MAX_CANVAS_WIDTH
+          );
+          const canvasHeight = Math.min(
+            isMobile ? availableHeight * 2 : availableHeight * 3,
+            MAX_CANVAS_HEIGHT
+          );
           
-          // Only resize if significantly different
-          if (Math.abs(canvas.width! - canvasWidth) > 100 || Math.abs(canvas.height! - canvasHeight) > 100) {
+          // Resize canvas when switching between mobile and desktop
+          // หรือเมื่อขนาดแตกต่างกันมาก (เช่น canvas จาก mobile มา desktop)
+          const currentWidth = canvas.width || 0;
+          const currentHeight = canvas.height || 0;
+          const widthDiff = Math.abs(currentWidth - canvasWidth);
+          const heightDiff = Math.abs(currentHeight - canvasHeight);
+          
+          // Resize if:
+          // 1. Size difference is significant (> 100px)
+          // 2. OR current canvas is too small for desktop (e.g., from mobile < 2000px when desktop needs 3000px)
+          const isCurrentSizeTooSmall = !isMobile && currentWidth < 2000 && canvasWidth >= 2500;
+          
+          if ((widthDiff > 100 || heightDiff > 100 || isCurrentSizeTooSmall) &&
+              canvasWidth <= MAX_CANVAS_WIDTH && canvasHeight <= MAX_CANVAS_HEIGHT) {
             canvas.setDimensions({
               width: canvasWidth,
               height: canvasHeight,
             });
             canvas.renderAll();
+            console.log(`Canvas resized: ${currentWidth}x${currentHeight} -> ${canvasWidth}x${canvasHeight} (isMobile: ${isMobile})`);
           }
         } catch (error) {
           console.error('Error resizing canvas:', error);
@@ -779,7 +1215,10 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
           const currentIndex = historyIndexRef.current;
           const newHistory = prev.slice(0, currentIndex + 1);
           newHistory.push(json);
-          if (newHistory.length > 50) {
+          // Reduce history size on mobile to save memory
+          const isMobile = window.innerWidth < 640;
+          const maxHistory = isMobile ? 20 : 50;
+          if (newHistory.length > maxHistory) {
             newHistory.shift();
           }
           // Update index to point to the new state
@@ -1728,21 +2167,27 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
     fabricCanvasRef.current.renderAll();
   };
 
-  const handleZoomReset = () => {
+  const handleZoomReset = useCallback(() => {
     if (!fabricCanvasRef.current) return;
     const canvas = fabricCanvasRef.current;
     setZoom(1);
     canvas.setZoom(1);
     // Reset to center of canvas
-    const canvasWidth = canvas.width || 5000;
-    const canvasHeight = canvas.height || 5000;
+    const isMobile = window.innerWidth < 640;
+    const toolbarHeight = isMobile ? 180 : 120;
+    const availableHeight = Math.max(window.innerHeight - toolbarHeight, 400);
+    // จำกัดขนาด canvas ไม่ให้เกิน limit
+    const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+    const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+    const canvasWidth = Math.min(canvas.width || MAX_CANVAS_WIDTH, MAX_CANVAS_WIDTH);
+    const canvasHeight = Math.min(canvas.height || MAX_CANVAS_HEIGHT, MAX_CANVAS_HEIGHT);
     const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight - 120;
+    const viewportHeight = availableHeight;
     const initialX = (canvasWidth - viewportWidth) / 2;
     const initialY = (canvasHeight - viewportHeight) / 2;
     canvas.setViewportTransform([1, 0, 0, 1, -initialX, -initialY]);
     canvas.renderAll();
-  };
+  }, []);
 
   // Listen for fullscreen changes
   useEffect(() => {
@@ -1832,7 +2277,63 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
       fabricCanvasRef.current.skipTargetFind = false; // Re-enable object selection
     }
     setIsPanning(false);
+    setIsMobilePanning(false);
+    setMobilePanStartPoint(null);
   };
+
+  // Reset viewport to absolute top (see header at top of page)
+  const handleResetViewport = useCallback(() => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    const isMobile = window.innerWidth < 640;
+    const toolbarHeight = isMobile ? 180 : 120;
+    const availableHeight = Math.max(window.innerHeight - toolbarHeight, 400);
+    
+    // จำกัดขนาด canvas ไม่ให้เกิน limit
+    const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+    const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+    const canvasWidth = Math.min(canvas.width || MAX_CANVAS_WIDTH, MAX_CANVAS_WIDTH);
+    const canvasHeight = Math.min(canvas.height || MAX_CANVAS_HEIGHT, MAX_CANVAS_HEIGHT);
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = availableHeight;
+    
+    // Reset to absolute top of canvas (y = 0) and center horizontally
+    const initialX = (canvasWidth - viewportWidth) / 2;
+    const initialY = 0; // บนสุดของ canvas
+    canvas.setViewportTransform([1, 0, 0, 1, -initialX, -initialY]);
+    canvas.renderAll();
+    setZoom(1);
+    
+    // Scroll page to absolute top to see header
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    
+    // Scroll canvas container to top
+    const container = document.querySelector('.canvas-editor-container');
+    if (container) {
+      container.scrollTop = 0;
+    }
+    
+    // Scroll all parent containers to top
+    let parent: HTMLElement | null = container as HTMLElement;
+    while (parent) {
+      parent.scrollTop = 0;
+      parent = parent.parentElement;
+    }
+    
+    // Try to scroll to header element if exists
+    const header = document.querySelector('header');
+    if (header) {
+      header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    
+    // Force scroll to top after a short delay to ensure it works
+    setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }, 100);
+  }, []);
 
   // Mouse wheel zoom - allow zoom in any tool mode
   const handleWheel = (e: React.WheelEvent) => {
@@ -2518,20 +3019,25 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
       if (fileInputRef.current) {
         fileInputRef.current.blur();
       }
-      await handleImageUpload(file);
-      // Clear input value after upload
-      event.target.value = '';
-      // Ensure focus returns to document body so keyboard shortcuts work
-      // Use setTimeout to ensure blur happens after file selection
-      setTimeout(() => {
-        if (document.activeElement instanceof HTMLInputElement && document.activeElement.type === 'file') {
-          document.activeElement.blur();
-        }
-        // Focus on body to ensure keyboard shortcuts work
-        if (document.body) {
-          document.body.focus();
-        }
-      }, 100);
+      try {
+        await handleImageUpload(file);
+      } catch (error: any) {
+        // Error already handled in handleImageUpload with alert
+        console.error('File select error:', error);
+      } finally {
+        // Clear input value after upload (always clear, even on error)
+        event.target.value = '';
+        // Ensure focus returns to document body so keyboard shortcuts work
+        setTimeout(() => {
+          if (document.activeElement instanceof HTMLInputElement && document.activeElement.type === 'file') {
+            document.activeElement.blur();
+          }
+          // Focus on body to ensure keyboard shortcuts work
+          if (document.body) {
+            document.body.focus();
+          }
+        }, 100);
+      }
     } else {
       event.target.value = '';
     }
@@ -2680,10 +3186,13 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         canvas.renderAll();
       } catch (error) {
         console.error('Error clearing canvas:', error);
-        // Fallback: recreate canvas
+        // Fallback: recreate canvas - จำกัดขนาดไม่ให้เกิน limit
         if (canvasRef.current && fabricCanvasRef.current) {
-          const width = fabricCanvasRef.current.width;
-          const height = fabricCanvasRef.current.height;
+          const isMobile = window.innerWidth < 640;
+          const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+          const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+          const width = Math.min(fabricCanvasRef.current.width || MAX_CANVAS_WIDTH, MAX_CANVAS_WIDTH);
+          const height = Math.min(fabricCanvasRef.current.height || MAX_CANVAS_HEIGHT, MAX_CANVAS_HEIGHT);
           fabricCanvasRef.current.dispose();
           const newCanvas = new fabric.Canvas(canvasRef.current, {
             width,
@@ -2773,10 +3282,28 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
           }
           
           const result = await uploadResponse.json();
-          // Save as image reference instead of full canvas data
+          
+          // ตรวจสอบว่าเป็น ImgBB URL หรือไม่ (ไม่ควรแปลงเป็น relative path)
+          let imageUrl = result.url;
+          const isImgBBUrl = imageUrl.includes('i.ibb.co') || imageUrl.includes('ibb.co');
+          
+          // ถ้าเป็น ImgBB URL ให้เก็บเป็น absolute URL ตามเดิม (ไม่แปลง)
+          if (!isImgBBUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+            try {
+              const urlObj = new URL(imageUrl);
+              imageUrl = urlObj.pathname;
+              console.log('[Canvas] Converted external URL to relative path for saving:', imageUrl);
+            } catch (e) {
+              console.warn('[Canvas] Failed to parse URL, using as-is:', imageUrl);
+            }
+          } else if (isImgBBUrl) {
+            console.log('[Canvas] ImgBB URL detected, keeping as absolute URL for saving:', imageUrl);
+          }
+          
+          // Save as image reference instead of full canvas data (บันทึกเป็น relative path)
           await onSave({ 
             canvas: null,
-            imageUrl: result.url,
+            imageUrl: imageUrl,
             isImage: true 
           });
         } else {
@@ -2791,14 +3318,52 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
       } else {
         // Save canvas data with canvas dimensions
         // Ensure all images have their src preserved in the JSON
+        // แปลง absolute URL เป็น relative path เพื่อให้ทำงานข้ามเครื่องได้
         const objects = fabricCanvasRef.current.getObjects();
         objects.forEach((obj: any) => {
           if (obj.type === 'image') {
             const img = obj as fabric.Image;
             const imgElement = img.getElement();
-            if (imgElement && imgElement.src) {
-              // Ensure src is in the object data
-              (obj as any).src = imgElement.src;
+            
+            // ใช้ relative path ที่เก็บไว้ก่อน (ถ้ามี)
+            let imgSrc = (obj as any)._relativePath;
+            
+            // ถ้าไม่มี relative path ให้แปลงจาก src
+            if (!imgSrc && imgElement && imgElement.src) {
+              imgSrc = imgElement.src;
+              
+              // ตรวจสอบว่าเป็น ImgBB URL หรือไม่
+              const isImgBBUrl = imgSrc.includes('i.ibb.co') || imgSrc.includes('ibb.co');
+              
+              // ถ้าเป็น absolute URL ที่มี API_URL ให้แปลงเป็น relative path
+              if (imgSrc.startsWith(API_URL)) {
+                imgSrc = imgSrc.replace(API_URL, '');
+                console.log('[Canvas] Converted API_URL to relative path:', imgSrc);
+              }
+              // ถ้าเป็น ImgBB URL ให้เก็บเป็น absolute URL ตามเดิม (ไม่แปลง)
+              else if (isImgBBUrl) {
+                console.log('[Canvas] ImgBB URL detected, keeping as absolute URL:', imgSrc);
+                // ไม่ต้องแปลง ImgBB URL
+              }
+              // ถ้าเป็น absolute URL อื่นๆ (เช่น Firebase Storage) ให้แปลงเป็น relative path
+              else if (imgSrc.startsWith('http://') || imgSrc.startsWith('https://')) {
+                try {
+                  const urlObj = new URL(imgSrc);
+                  imgSrc = urlObj.pathname;
+                  console.log('[Canvas] Converted external URL to relative path:', imgSrc);
+                } catch (e) {
+                  console.warn('[Canvas] Failed to parse URL, keeping as-is:', imgSrc);
+                }
+              }
+            }
+            
+            // ถ้าเป็น data URL ให้เก็บไว้ตามเดิม (ไม่แปลง)
+            if (imgSrc && !imgSrc.startsWith('data:')) {
+              // Ensure src is in the object data (บันทึกเป็น relative path)
+              (obj as any).src = imgSrc;
+            } else if (imgSrc && imgSrc.startsWith('data:')) {
+              // Data URL เก็บไว้ตามเดิม
+              (obj as any).src = imgSrc;
             }
           }
         });
@@ -2806,8 +3371,12 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         // Get fresh JSON with image srcs
         const updatedCanvasData = fabricCanvasRef.current.toJSON(['selectable', 'evented', 'src']);
         const canvasWithDimensions: any = JSON.parse(JSON.stringify(updatedCanvasData));
-        canvasWithDimensions.canvasWidth = fabricCanvasRef.current.width;
-        canvasWithDimensions.canvasHeight = fabricCanvasRef.current.height;
+        // จำกัดขนาด canvas ที่บันทึกไม่ให้เกิน limit เพื่อป้องกัน memory issues
+        const isMobile = window.innerWidth < 640;
+        const MAX_CANVAS_WIDTH = isMobile ? 1500 : 3000;
+        const MAX_CANVAS_HEIGHT = isMobile ? 1500 : 3000;
+        canvasWithDimensions.canvasWidth = Math.min(fabricCanvasRef.current.width || MAX_CANVAS_WIDTH, MAX_CANVAS_WIDTH);
+        canvasWithDimensions.canvasHeight = Math.min(fabricCanvasRef.current.height || MAX_CANVAS_HEIGHT, MAX_CANVAS_HEIGHT);
         // Use viewportTransform property directly instead of getViewportTransform()
         canvasWithDimensions.viewportTransform = fabricCanvasRef.current.viewportTransform || [1, 0, 0, 1, 0, 0];
         await onSave({ canvas: canvasWithDimensions });
@@ -3047,7 +3616,7 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
     // Use capture phase to ensure we get the event first, before other handlers
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [handleUndo, handleRedo, handleCopy, handlePasteObjects, handleDuplicate, handleFullscreen, handleImageUpload, handleToolChange, handleZoomIn, handleZoomOut, handleZoomReset, handleDelete, handleBringToFront, handleSendToBack, handleBringForward, handleSendBackwards, isCropping]);
+  }, [handleUndo, handleRedo, handleCopy, handlePasteObjects, handleDuplicate, handleFullscreen, handleImageUpload, handleToolChange, handleZoomIn, handleZoomOut, handleZoomReset, handleResetViewport, handleDelete, handleBringToFront, handleSendToBack, handleBringForward, handleSendBackwards, isCropping]);
 
   // Handle mouse down for pan tool and middle mouse button
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
@@ -3109,85 +3678,85 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
   };
 
   return (
-    <div className="flex flex-col h-full canvas-editor-container">
+    <div className="flex flex-col h-full canvas-editor-container" style={{ minHeight: '400px' }}>
       {/* Toolbar */}
-      <div className="bg-gray-100 p-2 flex gap-2 items-center flex-wrap border-b relative z-50">
+      <div className="bg-gray-100 p-1 sm:p-2 flex gap-1 sm:gap-2 items-center flex-wrap border-b relative z-50 overflow-x-auto">
         {/* Tools */}
-        <div className="flex gap-1 border-r pr-2">
+        <div className="flex gap-1 border-r pr-1 sm:pr-2 flex-shrink-0">
           <button
             onClick={() => handleToolChange('select')}
-            className={`px-3 py-1 rounded ${tool === 'select' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'select' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="เลือก/ย้าย (V)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('draw')}
-            className={`px-3 py-1 rounded ${tool === 'draw' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'draw' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="วาด (P)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('text')}
-            className={`px-3 py-1 rounded ${tool === 'text' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'text' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="ข้อความ (T)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('rect')}
-            className={`px-3 py-1 rounded ${tool === 'rect' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'rect' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="สี่เหลี่ยม (R)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16v12H4V6z" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('circle')}
-            className={`px-3 py-1 rounded ${tool === 'circle' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'circle' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="วงกลม (C)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('line')}
-            className={`px-3 py-1 rounded ${tool === 'line' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'line' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="เส้นตรง (L)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12h16" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('arrow')}
-            className={`px-3 py-1 rounded ${tool === 'arrow' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'arrow' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="ลูกศร (A)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
             </svg>
           </button>
           <button
             onClick={() => handleToolChange('highlight')}
-            className={`px-3 py-1 rounded ${tool === 'highlight' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
+            className={`px-2 sm:px-3 py-1 rounded ${tool === 'highlight' ? 'bg-blue-500 text-white' : 'bg-white hover:bg-gray-200'}`}
             title="ไฮไลท์ (H)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
             </svg>
           </button>
-          <label className="px-3 py-1 rounded bg-white hover:bg-gray-200 cursor-pointer" title="รูปภาพ">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <label className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200 cursor-pointer" title="รูปภาพ">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             <input
@@ -3213,60 +3782,60 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
             <>
               <button
                 onClick={handleApplyCrop}
-                className="px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600 flex items-center gap-1"
+                className="px-2 sm:px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600 flex items-center gap-1"
                 title="ยืนยัน Crop"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                <span className="text-sm font-medium">ยืนยัน</span>
+                <span className="text-xs sm:text-sm font-medium hidden sm:inline">ยืนยัน</span>
               </button>
               <button
                 onClick={handleCancelCrop}
-                className="px-3 py-1 rounded bg-red-500 text-white hover:bg-red-600 flex items-center gap-1"
+                className="px-2 sm:px-3 py-1 rounded bg-red-500 text-white hover:bg-red-600 flex items-center gap-1"
                 title="ยกเลิก Crop"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-                <span className="text-sm font-medium">ยกเลิก</span>
+                <span className="text-xs sm:text-sm font-medium hidden sm:inline">ยกเลิก</span>
               </button>
             </>
           )}
         </div>
 
         {/* Color Picker */}
-        <div className="flex items-center gap-2 border-r pr-2">
-          <label className="text-sm">สี:</label>
+        <div className="flex items-center gap-1 sm:gap-2 border-r pr-1 sm:pr-2 flex-shrink-0">
+          <label className="text-xs sm:text-sm hidden sm:inline">สี:</label>
           <input
             type="color"
             value={drawingColor}
             onChange={(e) => setDrawingColor(e.target.value)}
-            className="w-8 h-8 rounded border cursor-pointer"
+            className="w-6 h-6 sm:w-8 sm:h-8 rounded border cursor-pointer"
           />
         </div>
 
         {/* Brush Width */}
-        <div className="flex items-center gap-2 border-r pr-2">
-          <label className="text-sm">ความหนา:</label>
+        <div className="flex items-center gap-1 sm:gap-2 border-r pr-1 sm:pr-2 flex-shrink-0">
+          <label className="text-xs sm:text-sm hidden sm:inline">ความหนา:</label>
           <input
             type="range"
             min="1"
             max="20"
             value={drawingWidth}
             onChange={(e) => setDrawingWidth(Number(e.target.value))}
-            className="w-20"
+            className="w-12 sm:w-20"
           />
-          <span className="text-xs w-8">{drawingWidth}px</span>
+          <span className="text-xs w-6 sm:w-8">{drawingWidth}px</span>
         </div>
 
         {/* Font Family */}
-        <div className="flex items-center gap-2 border-r pr-2">
-          <label className="text-sm">ฟอนต์:</label>
+        <div className="flex items-center gap-1 sm:gap-2 border-r pr-1 sm:pr-2 flex-shrink-0 hidden sm:flex">
+          <label className="text-xs sm:text-sm">ฟอนต์:</label>
           <select
             value={fontFamily}
             onChange={(e) => setFontFamily(e.target.value)}
-            className="px-2 py-1 rounded border text-sm"
+            className="px-1 sm:px-2 py-1 rounded border text-xs sm:text-sm"
           >
             <option value="Arial">Arial</option>
             <option value="Helvetica">Helvetica</option>
@@ -3287,152 +3856,161 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         </div>
 
         {/* Font Size */}
-        <div className="flex items-center gap-2 border-r pr-2">
-          <label className="text-sm">ขนาด:</label>
+        <div className="flex items-center gap-1 sm:gap-2 border-r pr-1 sm:pr-2 flex-shrink-0">
+          <label className="text-xs sm:text-sm hidden sm:inline">ขนาด:</label>
           <input
             type="number"
             min="8"
             max="200"
             value={fontSize}
             onChange={(e) => setFontSize(Math.max(8, Math.min(200, Number(e.target.value))))}
-            className="w-16 px-2 py-1 rounded border text-sm"
+            className="w-12 sm:w-16 px-1 sm:px-2 py-1 rounded border text-xs sm:text-sm"
           />
-          <span className="text-xs">px</span>
+          <span className="text-xs hidden sm:inline">px</span>
         </div>
 
         {/* Undo/Redo */}
-        <div className="flex gap-1 border-r pr-2">
+        <div className="flex gap-1 border-r pr-1 sm:pr-2 flex-shrink-0">
           <button
             onClick={handleUndo}
             disabled={historyIndex <= 0 || history.length <= 1}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Undo (Ctrl+Z)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
             </svg>
           </button>
           <button
             onClick={handleRedo}
             disabled={historyIndex >= history.length - 1 || history.length === 0}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Redo (Ctrl+Shift+Z)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
             </svg>
           </button>
         </div>
 
         {/* Layer Ordering */}
-        <div className="flex gap-1 border-r pr-2">
+        <div className="flex gap-1 border-r pr-1 sm:pr-2 flex-shrink-0 hidden sm:flex">
           <button
             onClick={handleBringToFront}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="นำมาหน้าสุด (Ctrl+])"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
             </svg>
           </button>
           <button
             onClick={handleSendToBack}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="ส่งไปหลังสุด (Ctrl+[)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
           <button
             onClick={handleBringForward}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="นำมาข้างหน้า"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11l5-5m0 0l5 5m-5-5v12" />
             </svg>
           </button>
           <button
             onClick={handleSendBackwards}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="ส่งไปข้างหลัง"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 13l-5 5m0 0l-5-5m5 5V6" />
             </svg>
           </button>
         </div>
 
         {/* Copy/Paste/Duplicate */}
-        <div className="flex gap-1 border-r pr-2">
+        <div className="flex gap-1 border-r pr-1 sm:pr-2 flex-shrink-0 hidden sm:flex">
           <button
             onClick={handleCopy}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="Copy (Ctrl+C)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
           <button
             onClick={handlePasteObjects}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="Paste (Ctrl+V)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             </svg>
           </button>
           <button
             onClick={handleDuplicate}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="Duplicate (Ctrl+D)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
         </div>
 
         {/* Zoom */}
-        <div className="flex gap-1 border-r pr-2">
+        <div className="flex gap-1 border-r pr-1 sm:pr-2 flex-shrink-0">
           <button
             onClick={handleZoomOut}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="Zoom Out (-)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
             </svg>
           </button>
           <button
             onClick={handleZoomReset}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200 text-xs"
-            title="Reset Zoom (0)"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200 text-xs"
+            title="Reset Zoom & Center (0)"
           >
             {Math.round(zoom * 100)}%
           </button>
           <button
             onClick={handleZoomIn}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title="Zoom In (+)"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
             </svg>
           </button>
           <button
+            onClick={handleResetViewport}
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
+            title="กลับไปจุดเริ่มต้น (Reset View)"
+          >
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+          <button
             onClick={handleFullscreen}
-            className="px-3 py-1 rounded bg-white hover:bg-gray-200"
+            className="px-2 sm:px-3 py-1 rounded bg-white hover:bg-gray-200"
             title={isFullscreen ? "ออกจากเต็มจอ (F11)" : "ขยายเต็มจอ (F11)"}
           >
             {isFullscreen ? (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6h12v12" />
               </svg>
             ) : (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
               </svg>
             )}
@@ -3440,7 +4018,7 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         </div>
 
         {/* Actions */}
-        <div className="flex gap-1 ml-auto">
+        <div className="flex gap-1 ml-auto flex-shrink-0">
           <button
             onClick={(e) => {
               e.preventDefault();
@@ -3457,14 +4035,14 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
               e.preventDefault();
               e.stopPropagation();
             }}
-            className="px-3 py-1 rounded bg-red-500 text-white hover:bg-red-600"
+            className="px-2 sm:px-3 py-1 rounded bg-red-500 text-white hover:bg-red-600 text-xs sm:text-sm"
             title="ลบ (Delete)"
           >
             ลบ
           </button>
           <button
             onClick={handleClear}
-            className="px-3 py-1 rounded bg-orange-500 text-white hover:bg-orange-600"
+            className="px-2 sm:px-3 py-1 rounded bg-orange-500 text-white hover:bg-orange-600 text-xs sm:text-sm"
             title="ล้างทั้งหมด"
           >
             ล้าง
@@ -3472,7 +4050,7 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
+            className="px-2 sm:px-4 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 text-xs sm:text-sm"
           >
             {saving ? 'กำลังบันทึก...' : 'บันทึก'}
           </button>
@@ -3486,6 +4064,7 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         style={{ 
           width: '100%', 
           height: '100%',
+          minHeight: '300px',
           position: 'relative',
           zIndex: 0,
           overflow: 'hidden', // Prevent scrollbars, use pan instead
@@ -3593,6 +4172,70 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
             e.stopPropagation();
           }
         }}
+        onTouchStart={(e) => {
+          // Removed complex two-finger pan - use floating button instead
+          // Single finger pan on mobile when not drawing/selecting
+          if (!fabricCanvasRef.current) return;
+          
+          if (e.touches.length === 1 && (tool === 'select' || tool === 'text')) {
+            const touch = e.touches[0];
+            const canvas = fabricCanvasRef.current;
+            
+            // Check if touching an object - if yes, don't pan (let object handle it)
+            const canvasElement = canvasRef.current;
+            if (canvasElement) {
+              const rect = canvasElement.getBoundingClientRect();
+              const touchX = touch.clientX;
+              const touchY = touch.clientY;
+              
+              // Check if touch is within canvas bounds
+              if (touchX >= rect.left && touchX <= rect.right && 
+                  touchY >= rect.top && touchY <= rect.bottom) {
+                // Touch is on canvas - check for object
+                const target = canvas.findTarget(e.nativeEvent, false);
+                if (target && target !== canvas) {
+                  return; // Let object handle the touch
+                }
+              }
+            }
+            
+            // Start panning
+            e.preventDefault();
+            setMobilePanStartPoint({ x: touch.clientX, y: touch.clientY });
+            setIsMobilePanning(true);
+            canvas.skipTargetFind = true;
+          }
+        }}
+        onTouchMove={(e) => {
+          if (!fabricCanvasRef.current) return;
+          
+          // Single finger pan only
+          if (isMobilePanning && e.touches.length === 1 && mobilePanStartPoint) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const deltaX = touch.clientX - mobilePanStartPoint.x;
+            const deltaY = touch.clientY - mobilePanStartPoint.y;
+            
+            const canvas = fabricCanvasRef.current;
+            const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+            vpt[4] += deltaX;
+            vpt[5] += deltaY;
+            canvas.setViewportTransform(vpt);
+            canvas.renderAll();
+            
+            setMobilePanStartPoint({ x: touch.clientX, y: touch.clientY });
+          }
+        }}
+        onTouchEnd={(e) => {
+          // End panning on touch end
+          if (isMobilePanning) {
+            setIsMobilePanning(false);
+            setMobilePanStartPoint(null);
+            if (fabricCanvasRef.current) {
+              fabricCanvasRef.current.skipTargetFind = false;
+            }
+          }
+        }}
       >
         <canvas
           ref={canvasRef}
@@ -3632,13 +4275,29 @@ export default function CanvasEditor({ initialContent, onSave }: CanvasEditorPro
         />
       </div>
 
+      {/* Floating Reset Button for Mobile */}
+      <button
+        onClick={handleResetViewport}
+        disabled={isDrawing || isDrawingShape}
+        className="fixed bottom-20 right-4 sm:hidden w-14 h-14 bg-blue-500 text-white rounded-full shadow-lg hover:bg-blue-600 active:bg-blue-700 transition-all duration-200 flex items-center justify-center z-50 disabled:opacity-50 disabled:pointer-events-none"
+        title={isDrawing || isDrawingShape ? "กำลังวาดรูป..." : "กลับไปจุดเริ่มต้น"}
+        style={{
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          pointerEvents: (isDrawing || isDrawingShape) ? 'none' : 'auto'
+        }}
+      >
+        <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+
       {/* Hint */}
-      <div className="bg-gray-100 p-2 text-xs text-gray-600 border-t flex gap-4 flex-wrap">
+      <div className="bg-gray-100 p-1 sm:p-2 text-xs text-gray-600 border-t flex gap-2 sm:gap-4 flex-wrap hidden sm:flex">
         <span>💡 ลากวางรูปภาพ, วาด, เพิ่มข้อความ/รูปทรง - แบบ Figma/ClickUp</span>
-        <span>|</span>
-        <span>⌨️ Delete: ลบ | Ctrl+Z: Undo | Ctrl+Shift+Z: Redo | Ctrl+C/V: Copy/Paste | Ctrl+D: Duplicate</span>
-        <span>|</span>
-        <span>🔍 Mouse Wheel: Zoom | P: Draw</span>
+        <span className="hidden md:inline">|</span>
+        <span className="hidden md:inline">⌨️ Delete: ลบ | Ctrl+Z: Undo | Ctrl+Shift+Z: Redo | Ctrl+C/V: Copy/Paste | Ctrl+D: Duplicate</span>
+        <span className="hidden md:inline">|</span>
+        <span className="hidden md:inline">🔍 Mouse Wheel: Zoom | P: Draw</span>
       </div>
     </div>
   );

@@ -44,7 +44,8 @@ export default function IssueEditor({ initialContent, onSave, onEditingChange }:
   
   return (
     <div 
-      className="h-full" 
+      className="h-full min-h-[400px] sm:min-h-[500px]" 
+      style={{ height: '100%', minHeight: '400px' }}
       onMouseDown={handleEditingStart} 
       onTouchStart={handleEditingStart}
     >

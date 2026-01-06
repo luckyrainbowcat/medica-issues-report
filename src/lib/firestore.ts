@@ -198,7 +198,7 @@ export async function getIssues(filters?: { status?: string; componentId?: strin
       const snapshot = await getDocs(q);
       let issues = snapshot.docs.map(doc => {
         const data = convertTimestamp(doc.data());
-        return {
+        const result: any = {
           ...data,
           _id: doc.id,
           componentPath: deserializeArray(data.componentPath || '[]'),
@@ -206,6 +206,11 @@ export async function getIssues(filters?: { status?: string; componentId?: strin
           type: data.type || 'internal',
           parentIssueId: data.parentIssueId || null,
         };
+        // Convert timestamp fields
+        if (data.reportedAt?.toDate) result.reportedAt = data.reportedAt.toDate();
+        if (data.assignedAt?.toDate) result.assignedAt = data.assignedAt.toDate();
+        if (data.closedAt?.toDate) result.closedAt = data.closedAt.toDate();
+        return result;
       });
       
       // Apply filters in memory (always do this to ensure consistency)
@@ -217,13 +222,21 @@ export async function getIssues(filters?: { status?: string; componentId?: strin
           issues = issues.filter(issue => issue.componentId === filters.componentId);
         }
         if (filters.type) {
-          issues = issues.filter(issue => (issue as any).type === filters.type);
+          // Filter by type, default to 'internal' if type is not set
+          issues = issues.filter(issue => {
+            const issueType = (issue as any).type || 'internal';
+            return issueType === filters.type;
+          });
         }
         if (filters.parentIssueId !== undefined) {
           if (filters.parentIssueId === null) {
-            issues = issues.filter(issue => !(issue as any).parentIssueId);
+            // Filter for parent issues: parentIssueId should be null, undefined, or empty string
+            issues = issues.filter(issue => {
+              const parentId = (issue as any).parentIssueId;
+              return parentId === null || parentId === undefined || parentId === '';
+            });
           } else {
-            issues = issues.filter(issue => (issue as any).parentIssueId === filters.parentIssueId);
+            issues = issues.filter(issue => String((issue as any).parentIssueId) === String(filters.parentIssueId));
           }
         }
       }
@@ -243,12 +256,19 @@ export async function getIssues(filters?: { status?: string; componentId?: strin
         const snapshot = await getDocs(q);
         let issues = snapshot.docs.map(doc => {
           const data = convertTimestamp(doc.data());
-          return {
+          const result: any = {
             ...data,
             _id: doc.id,
             componentPath: deserializeArray(data.componentPath || '[]'),
             description: deserializeJson(data.description || null),
+            type: data.type || 'internal',
+            parentIssueId: data.parentIssueId || null,
           };
+          // Convert timestamp fields
+          if (data.reportedAt?.toDate) result.reportedAt = data.reportedAt.toDate();
+          if (data.assignedAt?.toDate) result.assignedAt = data.assignedAt.toDate();
+          if (data.closedAt?.toDate) result.closedAt = data.closedAt.toDate();
+          return result;
         });
         
         if (filters) {
@@ -259,13 +279,21 @@ export async function getIssues(filters?: { status?: string; componentId?: strin
             issues = issues.filter(issue => issue.componentId === filters.componentId);
           }
           if (filters.type) {
-            issues = issues.filter(issue => (issue as any).type === filters.type);
+            // Filter by type, default to 'internal' if type is not set
+            issues = issues.filter(issue => {
+              const issueType = (issue as any).type || 'internal';
+              return issueType === filters.type;
+            });
           }
           if (filters.parentIssueId !== undefined) {
             if (filters.parentIssueId === null) {
-              issues = issues.filter(issue => !(issue as any).parentIssueId);
+              // Filter for parent issues: parentIssueId should be null, undefined, or empty string
+              issues = issues.filter(issue => {
+                const parentId = (issue as any).parentIssueId;
+                return parentId === null || parentId === undefined || parentId === '';
+              });
             } else {
-              issues = issues.filter(issue => (issue as any).parentIssueId === filters.parentIssueId);
+              issues = issues.filter(issue => String((issue as any).parentIssueId) === String(filters.parentIssueId));
             }
           }
         }
@@ -305,7 +333,7 @@ export async function getIssue(id: string) {
         return null;
       }
       const data = convertTimestamp(docSnap.data());
-      return {
+      const result: any = {
         ...data,
         _id: docSnap.id,
         componentPath: deserializeArray(data.componentPath || '[]'),
@@ -313,6 +341,11 @@ export async function getIssue(id: string) {
         type: data.type || 'internal',
         parentIssueId: data.parentIssueId || null,
       };
+      // Convert timestamp fields
+      if (data.reportedAt?.toDate) result.reportedAt = data.reportedAt.toDate();
+      if (data.assignedAt?.toDate) result.assignedAt = data.assignedAt.toDate();
+      if (data.closedAt?.toDate) result.closedAt = data.closedAt.toDate();
+      return result;
     } catch (error: any) {
       // Only retry once for critical errors
       if (error.message?.includes('offline') || error.code === 'unavailable') {
@@ -348,6 +381,7 @@ export async function createIssue(data: {
   title: string;
   status?: string;
   priority?: string;
+  urgency?: string;
   componentId?: string | null;
   componentPath?: string[];
   description?: any;
@@ -358,6 +392,7 @@ export async function createIssue(data: {
   parentIssueId?: string | null;
   hospital?: string;
   department?: string;
+  issueType?: string;
 }) {
   try {
     const now = Timestamp.now();
@@ -365,6 +400,7 @@ export async function createIssue(data: {
       title: data.title,
       status: data.status || 'OPEN',
       priority: data.priority || 'MED',
+      urgency: data.urgency || null,
       componentId: data.componentId || null,
       componentPath: serializeArray(data.componentPath || []),
       description: serializeJson(data.description || null),
@@ -373,16 +409,33 @@ export async function createIssue(data: {
       updatedAt: now,
     };
     
+    // เพิ่มประเภทปัญหา
+    if (data.issueType) issueData.issueType = data.issueType;
+    
     // Internal issue fields
     if (data.type === 'internal') {
-      if (data.reporterName) issueData.reporterName = data.reporterName;
-      if (data.assignedTo) issueData.assignedTo = data.assignedTo;
+      if (data.reporterName) {
+        issueData.reporterName = data.reporterName;
+        issueData.reportedAt = now; // เวลาแจ้ง
+      }
+      if (data.assignedTo) {
+        issueData.assignedTo = data.assignedTo;
+        issueData.assignedAt = now; // เวลารับงาน
+      }
     }
     
     // External issue fields
     if (data.type === 'external') {
       if (data.hospital) issueData.hospital = data.hospital;
       if (data.department) issueData.department = data.department;
+      if (data.reporterName) {
+        issueData.reporterName = data.reporterName;
+        issueData.reportedAt = now; // เวลาแจ้ง
+      }
+      if (data.assignedTo) {
+        issueData.assignedTo = data.assignedTo;
+        issueData.assignedAt = now; // เวลารับงาน
+      }
     }
     
     // Parent issue for sub-issues
@@ -403,6 +456,7 @@ export async function updateIssue(id: string, data: {
   title?: string;
   status?: string;
   priority?: string;
+  urgency?: string;
   componentId?: string | null;
   componentPath?: string[];
   description?: any;
@@ -413,6 +467,7 @@ export async function updateIssue(id: string, data: {
   parentIssueId?: string | null;
   hospital?: string;
   department?: string;
+  issueType?: string;
 }) {
   try {
     const docRef = doc(db, 'issues', id);
@@ -422,13 +477,42 @@ export async function updateIssue(id: string, data: {
     if (data.title !== undefined) updateData.title = data.title;
     if (data.status !== undefined) updateData.status = data.status;
     if (data.priority !== undefined) updateData.priority = data.priority;
+    if (data.urgency !== undefined) updateData.urgency = data.urgency;
     if (data.componentId !== undefined) updateData.componentId = data.componentId;
     if (data.componentPath !== undefined) updateData.componentPath = serializeArray(data.componentPath);
     if (data.description !== undefined) updateData.description = serializeJson(data.description);
     if (data.type !== undefined) updateData.type = data.type;
-    if (data.reporterName !== undefined) updateData.reporterName = data.reporterName;
-    if (data.assignedTo !== undefined) updateData.assignedTo = data.assignedTo;
-    if (data.closedBy !== undefined) updateData.closedBy = data.closedBy;
+    if (data.issueType !== undefined) updateData.issueType = data.issueType;
+    if (data.reporterName !== undefined) {
+      updateData.reporterName = data.reporterName;
+      // ถ้ายังไม่มี reportedAt ให้เพิ่ม
+      if (data.reporterName && !updateData.reportedAt) {
+        const existingIssue = await getIssue(id);
+        if (existingIssue && !(existingIssue as any).reportedAt) {
+          updateData.reportedAt = Timestamp.now();
+        }
+      }
+    }
+    if (data.assignedTo !== undefined) {
+      updateData.assignedTo = data.assignedTo;
+      // ถ้ายังไม่มี assignedAt และมีการกำหนด assignedTo ให้เพิ่ม
+      if (data.assignedTo && !updateData.assignedAt) {
+        const existingIssue = await getIssue(id);
+        if (existingIssue && !(existingIssue as any).assignedAt) {
+          updateData.assignedAt = Timestamp.now();
+        }
+      }
+    }
+    if (data.closedBy !== undefined) {
+      updateData.closedBy = data.closedBy;
+      // ถ้ายังไม่มี closedAt และมีการกำหนด closedBy ให้เพิ่ม
+      if (data.closedBy && !updateData.closedAt) {
+        const existingIssue = await getIssue(id);
+        if (existingIssue && !(existingIssue as any).closedAt) {
+          updateData.closedAt = Timestamp.now();
+        }
+      }
+    }
     if (data.parentIssueId !== undefined) updateData.parentIssueId = data.parentIssueId;
     if (data.hospital !== undefined) updateData.hospital = data.hospital;
     if (data.department !== undefined) updateData.department = data.department;
@@ -539,18 +623,158 @@ export async function createUser(data: { username: string; password: string; nam
 
 export async function verifyUser(username: string, password: string) {
   try {
-    const user = await getUserByUsername(username);
+    // Trim whitespace to handle mobile keyboard issues
+    const trimmedUsername = username.trim();
+    const trimmedPassword = password.trim();
+    
+    const user = await getUserByUsername(trimmedUsername);
     if (!user) {
       return null;
     }
     // Simple password comparison (in production, use hashed passwords)
-    if ((user as any).password === password) {
+    // Trim stored password as well to handle any whitespace issues
+    const storedPassword = String((user as any).password || '').trim();
+    if (storedPassword === trimmedPassword) {
       const { password: _, ...userWithoutPassword } = user as any;
       return userWithoutPassword;
     }
     return null;
   } catch (error) {
     console.error('Error verifying user:', error);
+    throw error;
+  }
+}
+
+export async function updateUser(id: string, data: {
+  name?: string;
+  profilePicture?: string;
+}) {
+  try {
+    const docRef = doc(db, 'users', id);
+    const updateData: any = {
+      updatedAt: Timestamp.now(),
+    };
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.profilePicture !== undefined) updateData.profilePicture = data.profilePicture;
+    
+    await updateDoc(docRef, updateData);
+    const updated = await getUser(id);
+    // Don't return password
+    if (updated) {
+      delete (updated as any).password;
+    }
+    return updated;
+  } catch (error) {
+    console.error('Error updating user:', error);
+    throw error;
+  }
+}
+
+// Hospital operations
+export const hospitalCollection = collection(db, 'hospitals');
+
+export async function getHospitals() {
+  try {
+    const q = query(hospitalCollection, orderBy('name', 'asc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => {
+      const data = convertTimestamp(doc.data());
+      return {
+        ...data,
+        _id: doc.id,
+      };
+    });
+  } catch (error: any) {
+    console.error('Error getting hospitals:', error);
+    throw error;
+  }
+}
+
+export async function createHospital(data: { name: string; province?: string | null; code?: string | null; address?: string | null }) {
+  try {
+    const now = Timestamp.now();
+    const hospitalData = {
+      name: data.name,
+      province: data.province || null,
+      code: data.code || null,
+      address: data.address || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const docRef = await addDoc(hospitalCollection, hospitalData);
+    const created = await getDoc(docRef);
+    if (!created.exists()) {
+      throw new Error('Failed to create hospital');
+    }
+    const data_result = convertTimestamp(created.data());
+    return {
+      ...data_result,
+      _id: created.id,
+    };
+  } catch (error) {
+    console.error('Error creating hospital:', error);
+    throw error;
+  }
+}
+
+// Department operations
+export const departmentCollection = collection(db, 'departments');
+
+export async function getDepartments() {
+  try {
+    const q = query(departmentCollection, orderBy('name', 'asc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => {
+      const data = convertTimestamp(doc.data());
+      return {
+        ...data,
+        _id: doc.id,
+      };
+    });
+  } catch (error: any) {
+    console.error('Error getting departments:', error);
+    throw error;
+  }
+}
+
+export async function createDepartment(data: { name: string }) {
+  try {
+    const now = Timestamp.now();
+    const departmentData = {
+      name: data.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const docRef = await addDoc(departmentCollection, departmentData);
+    const created = await getDoc(docRef);
+    if (!created.exists()) {
+      throw new Error('Failed to create department');
+    }
+    const data_result = convertTimestamp(created.data());
+    return {
+      ...data_result,
+      _id: created.id,
+    };
+  } catch (error) {
+    console.error('Error creating department:', error);
+    throw error;
+  }
+}
+
+export async function getDepartment(id: string) {
+  try {
+    const docRef = doc(db, 'departments', id);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) {
+      return null;
+    }
+    const data = convertTimestamp(docSnap.data());
+    return {
+      ...data,
+      _id: docSnap.id,
+    };
+  } catch (error) {
+    console.error('Error getting department:', error);
     throw error;
   }
 }
