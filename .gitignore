@@ -45,3 +45,6 @@ dev.db
 
 # Uploaded files (optional - uncomment if you don't want to commit uploaded images)
 # /public/uploads/*
+
+# Firebase Service Account Key (contains secrets)
+serviceAccountKey.json
